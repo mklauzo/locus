@@ -16,6 +16,7 @@ import ReservationDetailPage from './pages/ReservationDetailPage';
 import CalendarPage from './pages/CalendarPage';
 import UsersPage from './pages/UsersPage';
 import SettingsPage from './pages/SettingsPage';
+import AIAssistantPage from './pages/AIAssistantPage';
 
 interface AuthContextType {
   user: User | null;
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="/hotels/:hotelId/reservations" element={<ReservationsPage />} />
                 <Route path="/hotels/:hotelId/reservations/:id" element={<ReservationDetailPage />} />
                 <Route path="/hotels/:hotelId/calendar" element={<CalendarPage />} />
+                <Route path="/hotels/:hotelId/ai-assistant" element={<AIAssistantPage />} />
                 {user?.role === 'ADMIN' && <Route path="/users" element={<UsersPage />} />}
                 <Route path="/settings" element={<SettingsPage themeSettings={themeSettings} onUpdateTheme={updateTheme} />} />
               </Route>

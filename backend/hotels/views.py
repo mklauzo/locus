@@ -8,11 +8,11 @@ from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models import Q
-from .models import Hotel, Room, Reservation, MailCorrespondence, AuditLog
+from .models import Hotel, Room, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
 from .serializers import (
     UserSerializer, UserMeSerializer, HotelSerializer, RoomSerializer,
     ReservationSerializer, ReservationListSerializer, CalendarSerializer,
-    MailCorrespondenceSerializer,
+    MailCorrespondenceSerializer, AIAssistantSerializer, AIAssistantDocumentSerializer,
 )
 from .tasks import search_mail_for_reservation
 
@@ -113,6 +113,33 @@ class HotelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         hotel = serializer.save(created_by=self.request.user)
         hotel.users.add(self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def test_smtp(self, request, pk=None):
+        hotel = self.get_object()
+        host = request.data.get('smtp_host', hotel.smtp_host)
+        port = int(request.data.get('smtp_port', hotel.smtp_port))
+        ssl = request.data.get('smtp_ssl', hotel.smtp_ssl)
+        login = request.data.get('smtp_login', hotel.smtp_login)
+        password = request.data.get('smtp_password', hotel.smtp_password)
+
+        if not host or not login or not password:
+            return Response({'status': 'error', 'message': 'Brak danych SMTP.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            import smtplib
+            if ssl:
+                server = smtplib.SMTP_SSL(host, port, timeout=15)
+            else:
+                server = smtplib.SMTP(host, port, timeout=15)
+                server.starttls()
+            server.login(login, password)
+            server.quit()
+            return Response({'status': 'ok', 'message': 'Połączenie SMTP OK.'})
+        except smtplib.SMTPAuthenticationError as e:
+            return Response({'status': 'error', 'message': f'Błąd logowania SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'status': 'error', 'message': f'Błąd połączenia SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def test_imap(self, request, pk=None):
@@ -251,6 +278,405 @@ class ReservationViewSet(viewsets.ModelViewSet):
         return Response({'status': 'mail_search_started'})
 
 
+# --- AI Assistant ---
+
+class AIAssistantViewSet(viewsets.ModelViewSet):
+    serializer_class = AIAssistantSerializer
+
+    def get_queryset(self):
+        return AIAssistant.objects.filter(
+            hotel_id=self.kwargs['hotel_pk']
+        ).prefetch_related('documents')
+
+    def perform_create(self, serializer):
+        serializer.save(hotel_id=self.kwargs['hotel_pk'])
+
+
+def _extract_file_content(uploaded_file):
+    """Extract text content from uploaded file (TXT, MD, PDF, DOCX)."""
+    name = uploaded_file.name.lower()
+    raw = uploaded_file.read()
+
+    if name.endswith('.txt') or name.endswith('.md'):
+        return raw.decode('utf-8', errors='replace')
+
+    if name.endswith('.pdf'):
+        try:
+            from pdfminer.high_level import extract_text
+            import io
+            text = extract_text(io.BytesIO(raw))
+            return text or f'[Pusty PDF: {uploaded_file.name}]'
+        except ImportError:
+            pass
+        return f'[Nie można odczytać PDF (brak biblioteki): {uploaded_file.name}]'
+
+    if name.endswith('.docx'):
+        try:
+            import docx
+            import io
+            doc = docx.Document(io.BytesIO(raw))
+            return '\n'.join(p.text for p in doc.paragraphs if p.text.strip())
+        except ImportError:
+            pass
+        return f'[Nie można odczytać DOCX (brak biblioteki): {uploaded_file.name}]'
+
+    try:
+        return raw.decode('utf-8', errors='replace')
+    except Exception:
+        return f'[Plik: {uploaded_file.name}]'
+
+
+def _call_llm_api(llm_model, api_key, system_prompt, user_message, ollama_url='http://localhost:11434'):
+    """Call LLM API (OpenAI, Anthropic, Google Gemini or Ollama) and return generated text."""
+    import urllib.request
+    import urllib.error
+    import json as json_lib
+
+    if llm_model.startswith('claude'):
+        url = 'https://api.anthropic.com/v1/messages'
+        headers = {
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+        }
+        payload = {
+            'model': llm_model,
+            'max_tokens': 1024,
+            'system': system_prompt,
+            'messages': [{'role': 'user', 'content': user_message}],
+        }
+    elif llm_model.startswith('gemini'):
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/{llm_model}:generateContent?key={api_key}'
+        headers = {'Content-Type': 'application/json'}
+        full_message = f'{system_prompt}\n\n{user_message}' if system_prompt else user_message
+        payload = {
+            'contents': [{'role': 'user', 'parts': [{'text': full_message}]}],
+            'generationConfig': {'maxOutputTokens': 1024},
+        }
+    elif llm_model.startswith('ollama:'):
+        actual_model = llm_model[len('ollama:'):]
+        base_url = (ollama_url or 'http://localhost:11434').rstrip('/')
+        url = f'{base_url}/api/chat'
+        headers = {'Content-Type': 'application/json'}
+        messages = []
+        if system_prompt:
+            messages.append({'role': 'system', 'content': system_prompt})
+        messages.append({'role': 'user', 'content': user_message})
+        payload = {'model': actual_model, 'messages': messages, 'stream': False}
+    else:
+        url = 'https://api.openai.com/v1/chat/completions'
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        }
+        payload = {
+            'model': llm_model,
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_message},
+            ],
+            'max_tokens': 1024,
+        }
+
+    req = urllib.request.Request(
+        url,
+        data=json_lib.dumps(payload).encode('utf-8'),
+        headers=headers,
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json_lib.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8', errors='replace')
+        raise Exception(f'Błąd API ({e.code}): {error_body[:500]}')
+
+    if llm_model.startswith('claude'):
+        return result['content'][0]['text']
+    if llm_model.startswith('gemini'):
+        return result['candidates'][0]['content']['parts'][0]['text']
+    if llm_model.startswith('ollama:'):
+        return result['message']['content']
+    return result['choices'][0]['message']['content']
+
+
+@api_view(['POST'])
+def fetch_llm_models(request):
+    """Fetch available models from a given LLM provider."""
+    import urllib.request
+    import urllib.error
+    import json as json_lib
+
+    provider = request.data.get('provider', '')
+    api_key = request.data.get('api_key', '')
+    ollama_url = (request.data.get('ollama_url', '') or 'http://localhost:11434').rstrip('/')
+
+    try:
+        if provider == 'openai':
+            req = urllib.request.Request(
+                'https://api.openai.com/v1/models',
+                headers={'Authorization': f'Bearer {api_key}'},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json_lib.loads(resp.read())
+            models = sorted(
+                [m for m in data['data'] if m['id'].startswith(('gpt-', 'o1', 'o3', 'o4'))],
+                key=lambda m: m.get('created', 0),
+                reverse=True,
+            )
+            return Response([{'value': m['id'], 'label': m['id']} for m in models])
+
+        elif provider == 'anthropic':
+            # Anthropic has no public list API — return known models
+            return Response([
+                {'value': 'claude-opus-4-6', 'label': 'Claude Opus 4.6'},
+                {'value': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6'},
+                {'value': 'claude-haiku-4-5-20251001', 'label': 'Claude Haiku 4.5'},
+                {'value': 'claude-3-5-sonnet-20241022', 'label': 'Claude 3.5 Sonnet'},
+                {'value': 'claude-3-5-haiku-20241022', 'label': 'Claude 3.5 Haiku'},
+                {'value': 'claude-3-opus-20240229', 'label': 'Claude 3 Opus'},
+            ])
+
+        elif provider == 'gemini':
+            req = urllib.request.Request(
+                f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}',
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json_lib.loads(resp.read())
+            models = [
+                m for m in data.get('models', [])
+                if 'gemini' in m.get('name', '') and 'generateContent' in m.get('supportedGenerationMethods', [])
+            ]
+            return Response([
+                {'value': m['name'].replace('models/', ''), 'label': m.get('displayName', m['name'].replace('models/', ''))}
+                for m in models
+            ])
+
+        elif provider == 'ollama':
+            req = urllib.request.Request(f'{ollama_url}/api/tags')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json_lib.loads(resp.read())
+            models = data.get('models', [])
+            return Response([
+                {'value': f'ollama:{m["name"]}', 'label': m['name']}
+                for m in models
+            ])
+
+        else:
+            return Response({'detail': 'Nieznany dostawca.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8', errors='replace')
+        return Response({'detail': f'Błąd API ({e.code}): {error_body[:300]}'}, status=status.HTTP_502_BAD_GATEWAY)
+    except Exception as e:
+        return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+def _save_draft_to_imap(hotel, correspondence, reply_text, to_email):
+    """Append a draft reply to the hotel's IMAP Drafts folder."""
+    import imaplib
+    import time
+    from email.mime.text import MIMEText
+    import email as email_lib
+
+    msg = MIMEText(reply_text, 'plain', 'utf-8')
+    msg['From'] = hotel.email
+    msg['To'] = to_email
+    subject = correspondence.subject
+    if not subject.lower().startswith('re:'):
+        subject = f'Re: {subject}'
+    msg['Subject'] = subject
+    msg['Date'] = email_lib.utils.formatdate(localtime=True)
+    msg['In-Reply-To'] = correspondence.message_id
+    msg['References'] = correspondence.message_id
+
+    if hotel.imap_ssl:
+        mail = imaplib.IMAP4_SSL(hotel.imap_host, hotel.imap_port)
+    else:
+        mail = imaplib.IMAP4(hotel.imap_host, hotel.imap_port)
+    mail.login(hotel.imap_login, hotel.imap_password)
+
+    # Find Drafts folder
+    drafts_folder = 'Drafts'
+    _, folders = mail.list()
+    for folder_bytes in (folders or []):
+        decoded = folder_bytes.decode('utf-8', errors='replace')
+        if 'draft' in decoded.lower():
+            # Format: (\Flags) "/" "Folder Name"
+            parts = decoded.rsplit('"', 2)
+            if len(parts) >= 2:
+                candidate = parts[-2].strip('"').strip()
+                if candidate and 'draft' in candidate.lower():
+                    drafts_folder = candidate
+                    break
+            # Unquoted format
+            parts2 = decoded.rsplit(' ', 1)
+            if len(parts2) == 2:
+                candidate2 = parts2[-1].strip().strip('"')
+                if candidate2 and 'draft' in candidate2.lower():
+                    drafts_folder = candidate2
+                    break
+
+    try:
+        mail.append(
+            drafts_folder,
+            '(\\Draft)',
+            imaplib.Time2Internaldate(time.time()),
+            msg.as_bytes(),
+        )
+    finally:
+        try:
+            mail.logout()
+        except Exception:
+            pass
+
+
+def _send_via_smtp(hotel, correspondence, reply_text, to_email):
+    """Send reply email via hotel's SMTP configuration."""
+    import smtplib
+    from email.mime.text import MIMEText
+    import email as email_lib
+
+    msg = MIMEText(reply_text, 'plain', 'utf-8')
+    msg['From'] = hotel.email
+    msg['To'] = to_email
+    subject = correspondence.subject
+    if not subject.lower().startswith('re:'):
+        subject = f'Re: {subject}'
+    msg['Subject'] = subject
+    msg['Date'] = email_lib.utils.formatdate(localtime=True)
+    msg['In-Reply-To'] = correspondence.message_id
+    msg['References'] = correspondence.message_id
+
+    if hotel.smtp_ssl:
+        server = smtplib.SMTP_SSL(hotel.smtp_host, hotel.smtp_port, timeout=30)
+    else:
+        server = smtplib.SMTP(hotel.smtp_host, hotel.smtp_port, timeout=30)
+        server.starttls()
+
+    server.login(hotel.smtp_login, hotel.smtp_password)
+    server.sendmail(hotel.email, [to_email], msg.as_string())
+    server.quit()
+
+
+@api_view(['POST'])
+def upload_ai_document(request, hotel_pk, assistant_pk):
+    try:
+        assistant = AIAssistant.objects.get(pk=assistant_pk, hotel_id=hotel_pk)
+    except AIAssistant.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    uploaded_file = request.FILES.get('file')
+    if not uploaded_file:
+        return Response({'detail': 'Brak pliku.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if uploaded_file.size > 10 * 1024 * 1024:
+        return Response({'detail': 'Plik jest zbyt duży (max 10 MB).'}, status=status.HTTP_400_BAD_REQUEST)
+
+    content = _extract_file_content(uploaded_file)
+    doc = AIAssistantDocument.objects.create(
+        assistant=assistant,
+        name=uploaded_file.name,
+        content=content,
+    )
+    return Response(AIAssistantDocumentSerializer(doc).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+def delete_ai_document(request, hotel_pk, assistant_pk, pk):
+    try:
+        doc = AIAssistantDocument.objects.get(pk=pk, assistant_id=assistant_pk, assistant__hotel_id=hotel_pk)
+    except AIAssistantDocument.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    doc.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+def generate_email_reply(request, hotel_pk, reservation_pk, pk):
+    """Generate AI reply for a correspondence email and save to IMAP Drafts."""
+    try:
+        correspondence = MailCorrespondence.objects.select_related(
+            'reservation__hotel', 'reservation__room'
+        ).get(pk=pk, reservation_id=reservation_pk, reservation__hotel_id=hotel_pk)
+    except MailCorrespondence.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    reservation = correspondence.reservation
+    hotel = reservation.hotel
+
+    assistant = AIAssistant.objects.prefetch_related('documents').filter(
+        hotel=hotel, is_active=True
+    ).first()
+    if not assistant:
+        return Response(
+            {'detail': 'Brak aktywnego asystenta AI dla tego hotelu.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not assistant.llm_api_key and not assistant.llm_model.startswith('ollama:'):
+        return Response(
+            {'detail': 'Asystent AI nie ma skonfigurowanego klucza API.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    to_email = request.data.get('to_email', '') or correspondence.sender_email or reservation.contact_email or ''
+    send_via_smtp = request.data.get('send_via_smtp', False)
+
+    # Build context from documents
+    docs_context = ''
+    for doc in assistant.documents.all():
+        docs_context += f'\n\n--- Dokument: {doc.name} ---\n{doc.content[:3000]}'
+
+    system = (assistant.system_prompt or
+              'Jesteś pomocnym asystentem hotelowym. Odpowiadaj na emaile gości w imieniu hotelu. '
+              'Bądź uprzejmy, profesjonalny i pomocny.')
+    if docs_context:
+        system += f'\n\nDodatkowe informacje o hotelu:\n{docs_context}'
+
+    reservation_info = (
+        f'Hotel: {hotel.name}\n'
+        f'Gość: {reservation.guest_name}\n'
+        f'Pokój: {reservation.room.number}\n'
+        f'Przyjazd: {reservation.check_in}\n'
+        f'Wyjazd: {reservation.check_out}\n'
+    )
+
+    user_message = (
+        f'Informacje o rezerwacji:\n{reservation_info}\n\n'
+        f'Email gościa wymagający odpowiedzi:\n'
+        f'Temat: {correspondence.subject}\n'
+        f'Treść:\n{correspondence.body[:3000]}\n\n'
+        f'Napisz odpowiedź na powyższy email w imieniu hotelu.'
+    )
+
+    try:
+        reply_text = _call_llm_api(
+            assistant.llm_model, assistant.llm_api_key, system, user_message,
+            ollama_url=assistant.ollama_url or 'http://localhost:11434',
+        )
+    except Exception as e:
+        return Response({'detail': f'Błąd generowania odpowiedzi: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    # Send via SMTP or save to IMAP Drafts
+    if send_via_smtp:
+        if not hotel.smtp_host or not hotel.smtp_login or not hotel.smtp_password:
+            return Response({'reply_text': reply_text, 'smtp_sent': False,
+                             'smtp_error': 'Brak konfiguracji SMTP dla tego hotelu.'})
+        try:
+            _send_via_smtp(hotel, correspondence, reply_text, to_email)
+            return Response({'reply_text': reply_text, 'smtp_sent': True})
+        except Exception as e:
+            return Response({'reply_text': reply_text, 'smtp_sent': False, 'smtp_error': str(e)})
+    else:
+        if hotel.imap_host and hotel.imap_login and hotel.imap_password:
+            try:
+                _save_draft_to_imap(hotel, correspondence, reply_text, to_email)
+                return Response({'reply_text': reply_text, 'imap_saved': True})
+            except Exception as e:
+                return Response({'reply_text': reply_text, 'imap_saved': False, 'imap_error': str(e)})
+        return Response({'reply_text': reply_text, 'imap_saved': False})
+
+
 # --- Correspondence ---
 
 @api_view(['DELETE'])
@@ -294,6 +720,35 @@ def calendar_view(request, hotel_pk):
         'date_from': date_from,
         'date_to': date_to,
     })
+
+
+# --- SMTP test (standalone) ---
+
+@api_view(['POST'])
+def test_smtp_standalone(request):
+    import smtplib
+    host = request.data.get('smtp_host', '')
+    port = int(request.data.get('smtp_port', 587))
+    ssl = request.data.get('smtp_ssl', False)
+    login = request.data.get('smtp_login', '')
+    password = request.data.get('smtp_password', '')
+
+    if not host or not login or not password:
+        return Response({'status': 'error', 'message': 'Wypełnij host, login i hasło SMTP.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        if ssl:
+            server = smtplib.SMTP_SSL(host, port, timeout=15)
+        else:
+            server = smtplib.SMTP(host, port, timeout=15)
+            server.starttls()
+        server.login(login, password)
+        server.quit()
+        return Response({'status': 'ok', 'message': 'Połączenie SMTP OK.'})
+    except smtplib.SMTPAuthenticationError as e:
+        return Response({'status': 'error', 'message': f'Błąd logowania SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({'status': 'error', 'message': f'Błąd połączenia SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # --- IMAP test (standalone, no hotel needed) ---

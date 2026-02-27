@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Hotel, Room, Reservation, MailCorrespondence, AuditLog
+from .models import Hotel, Room, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
 
 User = get_user_model()
 
@@ -61,18 +61,37 @@ class HotelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Hotel
         fields = ['id', 'name', 'address', 'email', 'imap_host', 'imap_port',
-                  'imap_ssl', 'imap_login', 'imap_password', 'users', 'user_ids',
-                  'rooms', 'is_deleted', 'created_at', 'updated_at']
+                  'imap_ssl', 'imap_login', 'imap_password',
+                  'smtp_host', 'smtp_port', 'smtp_ssl', 'smtp_login', 'smtp_password',
+                  'users', 'user_ids', 'rooms', 'is_deleted', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
         extra_kwargs = {
             'imap_password': {'write_only': True},
+            'smtp_password': {'write_only': True},
         }
 
 
 class MailCorrespondenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = MailCorrespondence
-        fields = ['id', 'date', 'subject', 'body', 'message_id', 'created_at']
+        fields = ['id', 'date', 'subject', 'body', 'message_id', 'sender_email', 'created_at']
+
+
+class AIAssistantDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AIAssistantDocument
+        fields = ['id', 'name', 'content', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class AIAssistantSerializer(serializers.ModelSerializer):
+    documents = AIAssistantDocumentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = AIAssistant
+        fields = ['id', 'hotel', 'name', 'llm_model', 'llm_api_key', 'ollama_url',
+                  'system_prompt', 'is_active', 'documents', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'hotel', 'created_at', 'updated_at']
 
 
 class AuditLogSerializer(serializers.ModelSerializer):

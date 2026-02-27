@@ -112,6 +112,7 @@ def search_mail_for_reservation(self, reservation_id, search_term):
                 subject=subject,
                 body=body,
                 message_id=message_id_header,
+                sender_email=sender_email,
             )
             existing_ids.add(message_id_header)
 

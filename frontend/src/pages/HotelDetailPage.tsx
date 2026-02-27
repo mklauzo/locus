@@ -4,7 +4,7 @@ import {
   Typography, Card, CardContent, Grid, Button, Box, Chip, Alert, CircularProgress,
 } from '@mui/material';
 import {
-  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email,
+  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy,
 } from '@mui/icons-material';
 import api from '../api';
 import { Hotel } from '../types';
@@ -15,6 +15,8 @@ export default function HotelDetailPage() {
   const [hotel, setHotel] = useState<Hotel | null>(null);
   const [imapTesting, setImapTesting] = useState(false);
   const [imapResult, setImapResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpResult, setSmtpResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     api.get(`/hotels/${id}/`).then(r => setHotel(r.data));
@@ -31,6 +33,20 @@ export default function HotelDetailPage() {
       setImapResult({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia' });
     } finally {
       setImapTesting(false);
+    }
+  };
+
+  const handleTestSmtp = async () => {
+    if (!hotel) return;
+    setSmtpResult(null);
+    setSmtpTesting(true);
+    try {
+      const res = await api.post(`/hotels/${id}/test_smtp/`, {});
+      setSmtpResult({ type: 'success', text: res.data.message });
+    } catch (err: any) {
+      setSmtpResult({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia' });
+    } finally {
+      setSmtpTesting(false);
     }
   };
 
@@ -58,7 +74,21 @@ export default function HotelDetailPage() {
                   onClick={handleTestImap}
                   disabled={imapTesting}
                 >
-                  Test poczty
+                  Test IMAP
+                </Button>
+              </>
+            )}
+            {hotel.smtp_host && (
+              <>
+                <Chip label={`SMTP: ${hotel.smtp_host}`} size="small" />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={smtpTesting ? <CircularProgress size={16} /> : <Email />}
+                  onClick={handleTestSmtp}
+                  disabled={smtpTesting}
+                >
+                  Test SMTP
                 </Button>
               </>
             )}
@@ -69,11 +99,16 @@ export default function HotelDetailPage() {
               {imapResult.text}
             </Alert>
           )}
+          {smtpResult && (
+            <Alert severity={smtpResult.type} sx={{ mt: 1 }} onClose={() => setSmtpResult(null)}>
+              {smtpResult.text}
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
                 onClick={() => navigate(`/hotels/${id}/rooms`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
@@ -85,7 +120,7 @@ export default function HotelDetailPage() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
                 onClick={() => navigate(`/hotels/${id}/reservations`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
@@ -97,7 +132,7 @@ export default function HotelDetailPage() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
                 onClick={() => navigate(`/hotels/${id}/calendar`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
@@ -105,6 +140,18 @@ export default function HotelDetailPage() {
               <Typography variant="h6">Kalendarz</Typography>
               <Typography variant="body2" color="text.secondary">
                 Widok obłożenia pokoi
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
+                onClick={() => navigate(`/hotels/${id}/ai-assistant`)}>
+            <CardContent sx={{ textAlign: 'center', py: 4 }}>
+              <SmartToy sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
+              <Typography variant="h6">Asystent AI</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Konfiguracja odpowiedzi e-mail
               </Typography>
             </CardContent>
           </Card>

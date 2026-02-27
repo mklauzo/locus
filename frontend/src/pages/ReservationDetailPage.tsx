@@ -4,9 +4,9 @@ import {
   Typography, Button, Card, CardContent, Grid, Chip, Box, Divider,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
   FormControlLabel, Checkbox, Table, TableHead, TableRow, TableCell, TableBody,
-  Alert, CircularProgress, IconButton,
+  Alert, CircularProgress, IconButton, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { ArrowBack, Edit, History, Email, CheckCircle, Delete } from '@mui/icons-material';
+import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply } from '@mui/icons-material';
 import api from '../api';
 import { Reservation, RoomSimple } from '../types';
 
@@ -22,6 +22,11 @@ export default function ReservationDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editError, setEditError] = useState('');
+  const [replyDialog, setReplyDialog] = useState<{ corrId: number; subject: string; senderEmail: string } | null>(null);
+  const [replyToEmail, setReplyToEmail] = useState('');
+  const [replyMode, setReplyMode] = useState<'imap' | 'smtp'>('smtp');
+  const [replyLoading, setReplyLoading] = useState(false);
+  const [replyResult, setReplyResult] = useState<{ text: string; imapSaved?: boolean; smtpSent?: boolean; error?: string } | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -109,6 +114,35 @@ export default function ReservationDetailPage() {
       await api.delete(`/hotels/${hotelId}/reservations/${id}/correspondence/${corrId}/`);
       load();
     } catch {}
+  };
+
+  const openReplyDialog = (corrId: number, subject: string, senderEmail: string) => {
+    setReplyToEmail(senderEmail || reservation?.contact_email || '');
+    setReplyResult(null);
+    setReplyDialog({ corrId, subject, senderEmail });
+  };
+
+  const handleGenerateReply = async () => {
+    if (!replyDialog) return;
+    setReplyLoading(true);
+    setReplyResult(null);
+    try {
+      const res = await api.post(
+        `/hotels/${hotelId}/reservations/${id}/correspondence/${replyDialog.corrId}/reply/`,
+        { to_email: replyToEmail, send_via_smtp: replyMode === 'smtp' },
+      );
+      setReplyResult({
+        text: res.data.reply_text,
+        imapSaved: res.data.imap_saved,
+        smtpSent: res.data.smtp_sent,
+        error: res.data.imap_error || res.data.smtp_error,
+      });
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Błąd generowania odpowiedzi.';
+      setReplyResult({ text: '', error: msg });
+    } finally {
+      setReplyLoading(false);
+    }
   };
 
   if (loading) {
@@ -272,7 +306,14 @@ export default function ReservationDetailPage() {
                         <TableCell sx={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {c.body}
                         </TableCell>
-                        <TableCell align="right">
+                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                          <IconButton
+                            size="small"
+                            title="Generuj odpowiedź AI"
+                            onClick={() => openReplyDialog(c.id, c.subject, c.sender_email)}
+                          >
+                            <Reply fontSize="small" />
+                          </IconButton>
                           <IconButton size="small" onClick={() => handleDeleteCorrespondence(c.id)}>
                             <Delete fontSize="small" />
                           </IconButton>
@@ -327,6 +368,82 @@ export default function ReservationDetailPage() {
           </Grid>
         )}
       </Grid>
+
+      {/* Reply Dialog */}
+      <Dialog open={!!replyDialog} onClose={() => { setReplyDialog(null); setReplyResult(null); }} maxWidth="sm" fullWidth>
+        <DialogTitle>Generuj odpowiedź AI</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
+          {!replyResult && (
+            <>
+              <TextField
+                label="Adres e-mail odbiorcy"
+                value={replyToEmail}
+                onChange={e => setReplyToEmail(e.target.value)}
+                fullWidth
+                placeholder="email@gości.pl"
+              />
+              <ToggleButtonGroup
+                value={replyMode}
+                exclusive
+                onChange={(_, v) => { if (v) setReplyMode(v); }}
+                size="small"
+                fullWidth
+              >
+                <ToggleButton value="smtp" sx={{ flex: 1 }}>
+                  Wyślij emailem (SMTP)
+                </ToggleButton>
+                <ToggleButton value="imap" sx={{ flex: 1 }}>
+                  Zapisz do roboczych (IMAP)
+                </ToggleButton>
+              </ToggleButtonGroup>
+              <Alert severity="info">
+                {replyMode === 'smtp'
+                  ? 'Email zostanie wysłany bezpośrednio do gościa przez serwer SMTP hotelu.'
+                  : 'Odpowiedź zostanie zapisana w folderze Wersje robocze na skrzynce hotelu.'}
+              </Alert>
+            </>
+          )}
+          {replyResult && replyResult.error && !replyResult.text && (
+            <Alert severity="error">{replyResult.error}</Alert>
+          )}
+          {replyResult?.smtpSent && (
+            <Alert severity="success">Email wysłany do {replyToEmail}.</Alert>
+          )}
+          {replyResult?.imapSaved && (
+            <Alert severity="success">Odpowiedź zapisana w folderze Wersje robocze.</Alert>
+          )}
+          {replyResult && !replyResult.smtpSent && !replyResult.imapSaved && replyResult.text && (
+            <Alert severity="warning">
+              {replyResult.error
+                ? `Błąd: ${replyResult.error}. Treść poniżej — możesz ją skopiować.`
+                : 'Brak konfiguracji IMAP/SMTP. Treść poniżej — możesz ją skopiować.'}
+            </Alert>
+          )}
+          {replyResult?.text && (
+            <TextField
+              label="Wygenerowana odpowiedź"
+              multiline
+              rows={8}
+              value={replyResult.text}
+              fullWidth
+              InputProps={{ readOnly: true }}
+            />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setReplyDialog(null); setReplyResult(null); }}>Zamknij</Button>
+          {!replyResult && (
+            <Button
+              variant="contained"
+              startIcon={replyLoading ? <CircularProgress size={18} /> : <Reply />}
+              onClick={handleGenerateReply}
+              disabled={replyLoading || !replyToEmail}
+            >
+              {replyMode === 'smtp' ? 'Generuj i wyślij' : 'Generuj i zapisz'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>

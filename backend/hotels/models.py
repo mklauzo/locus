@@ -31,6 +31,11 @@ class Hotel(models.Model):
     imap_ssl = models.BooleanField(default=True)
     imap_login = models.CharField(max_length=255, blank=True)
     imap_password = models.CharField(max_length=255, blank=True)
+    smtp_host = models.CharField(max_length=255, blank=True)
+    smtp_port = models.IntegerField(default=587)
+    smtp_ssl = models.BooleanField(default=False)
+    smtp_login = models.CharField(max_length=255, blank=True)
+    smtp_password = models.CharField(max_length=255, blank=True)
     users = models.ManyToManyField(User, related_name='hotels', blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_hotels')
     is_deleted = models.BooleanField(default=False)
@@ -109,6 +114,7 @@ class MailCorrespondence(models.Model):
     subject = models.CharField(max_length=500)
     body = models.TextField()
     message_id = models.CharField(max_length=500, unique=True)
+    sender_email = models.EmailField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -117,6 +123,38 @@ class MailCorrespondence(models.Model):
     class Meta:
         db_table = 'mail_correspondence'
         ordering = ['-date']
+
+
+class AIAssistant(models.Model):
+    hotel = models.ForeignKey(Hotel, on_delete=models.CASCADE, related_name='ai_assistants')
+    name = models.CharField(max_length=255)
+    llm_model = models.CharField(max_length=100, default='gpt-4o-mini')
+    llm_api_key = models.CharField(max_length=500, blank=True)
+    ollama_url = models.CharField(max_length=500, blank=True, default='http://ollama:11434')
+    system_prompt = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.hotel.name})"
+
+    class Meta:
+        db_table = 'ai_assistants'
+
+
+class AIAssistantDocument(models.Model):
+    assistant = models.ForeignKey(AIAssistant, on_delete=models.CASCADE, related_name='documents')
+    name = models.CharField(max_length=255)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = 'ai_assistant_documents'
+        ordering = ['name']
 
 
 class AuditLog(models.Model):

@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Typography, Card, CardContent, ToggleButtonGroup, ToggleButton, Box, Divider,
   TextField, Button, Alert,
 } from '@mui/material';
-import { LightMode, DarkMode } from '@mui/icons-material';
+import { LightMode, DarkMode, ArrowBack } from '@mui/icons-material';
 import api from '../api';
 
 const COLORS = [
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export default function SettingsPage({ themeSettings, onUpdateTheme }: Props) {
+  const navigate = useNavigate();
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -48,6 +50,10 @@ export default function SettingsPage({ themeSettings, onUpdateTheme }: Props) {
 
   return (
     <>
+      <Button startIcon={<ArrowBack />} onClick={() => navigate('/')} sx={{ mb: 2 }}>
+        Powrót do głównego menu
+      </Button>
+
       <Typography variant="h5" sx={{ mb: 3 }}>Ustawienia</Typography>
 
       <Card sx={{ maxWidth: 500, mb: 3 }}>

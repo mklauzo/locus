@@ -33,7 +33,21 @@ urlpatterns = [
     })),
     path('hotels/<int:hotel_pk>/reservations/<int:reservation_pk>/correspondence/<int:pk>/',
          views.delete_correspondence, name='delete_correspondence'),
+    path('hotels/<int:hotel_pk>/reservations/<int:reservation_pk>/correspondence/<int:pk>/reply/',
+         views.generate_email_reply, name='generate_email_reply'),
     path('hotels/<int:hotel_pk>/calendar/', views.calendar_view, name='calendar'),
+    path('hotels/<int:hotel_pk>/ai-assistant/', views.AIAssistantViewSet.as_view({
+        'get': 'list', 'post': 'create',
+    })),
+    path('hotels/<int:hotel_pk>/ai-assistant/<int:pk>/', views.AIAssistantViewSet.as_view({
+        'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy',
+    })),
+    path('hotels/<int:hotel_pk>/ai-assistant/<int:assistant_pk>/documents/',
+         views.upload_ai_document, name='upload_ai_document'),
+    path('hotels/<int:hotel_pk>/ai-assistant/<int:assistant_pk>/documents/<int:pk>/',
+         views.delete_ai_document, name='delete_ai_document'),
+    path('fetch-llm-models/', views.fetch_llm_models, name='fetch_llm_models'),
+    path('test-smtp/', views.test_smtp_standalone, name='test_smtp'),
     path('test-imap/', views.test_imap_standalone, name='test_imap'),
     path('weather/', views.weather, name='weather'),
 ]

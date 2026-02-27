@@ -19,6 +19,10 @@ export interface Hotel {
   imap_port: number;
   imap_ssl: boolean;
   imap_login: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_ssl: boolean;
+  smtp_login: string;
   rooms: RoomSimple[];
   users: { id: number; username: string }[];
   created_at: string;
@@ -45,6 +49,28 @@ export interface MailCorrespondence {
   subject: string;
   body: string;
   message_id: string;
+  sender_email: string;
+}
+
+export interface AIAssistantDocument {
+  id: number;
+  name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface AIAssistant {
+  id: number;
+  hotel: number;
+  name: string;
+  llm_model: string;
+  llm_api_key: string;
+  ollama_url: string;
+  system_prompt: string;
+  is_active: boolean;
+  documents: AIAssistantDocument[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AuditLogEntry {
