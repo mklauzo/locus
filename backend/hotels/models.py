@@ -82,6 +82,7 @@ class Reservation(models.Model):
     contact_email = models.EmailField(blank=True)
     contact_phone = models.CharField(max_length=30, blank=True)
     is_settled = models.BooleanField(default=False)
+    has_new_mail = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     edited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='edited_reservations')

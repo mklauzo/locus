@@ -115,7 +115,7 @@ class ReservationSerializer(serializers.ModelSerializer):
                   'guest_last_name', 'guest_name', 'companions',
                   'animals', 'check_in', 'check_out', 'days_count', 'deposit_paid',
                   'deposit_amount', 'deposit_date', 'remaining_amount', 'notes',
-                  'contact_email', 'contact_phone', 'is_settled', 'is_deleted',
+                  'contact_email', 'contact_phone', 'is_settled', 'has_new_mail', 'is_deleted',
                   'created_by', 'edited_by', 'correspondence', 'audit_logs',
                   'created_at', 'updated_at']
         read_only_fields = ['id', 'created_by', 'edited_by', 'created_at', 'updated_at']
@@ -163,7 +163,7 @@ class ReservationListSerializer(serializers.ModelSerializer):
                   'guest_last_name', 'guest_name', 'companions',
                   'animals', 'check_in', 'check_out', 'days_count', 'deposit_paid',
                   'deposit_amount', 'remaining_amount', 'contact_email', 'contact_phone',
-                  'is_settled', 'is_deleted', 'created_at']
+                  'is_settled', 'has_new_mail', 'is_deleted', 'created_at']
 
 
 class CalendarSerializer(serializers.ModelSerializer):

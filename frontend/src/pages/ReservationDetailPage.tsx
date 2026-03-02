@@ -5,14 +5,17 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
   FormControlLabel, Checkbox, Table, TableHead, TableRow, TableCell, TableBody,
   Alert, CircularProgress, IconButton, ToggleButton, ToggleButtonGroup,
+  useMediaQuery, useTheme, Collapse,
 } from '@mui/material';
-import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply, Refresh } from '@mui/icons-material';
+import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply, Refresh, ExpandMore, ExpandLess } from '@mui/icons-material';
 import api from '../api';
 import { Reservation, RoomSimple } from '../types';
 
 export default function ReservationDetailPage() {
   const { hotelId, id } = useParams();
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [rooms, setRooms] = useState<RoomSimple[]>([]);
   const [editOpen, setEditOpen] = useState(false);
@@ -27,6 +30,7 @@ export default function ReservationDetailPage() {
   const [replyMode, setReplyMode] = useState<'imap' | 'smtp'>('smtp');
   const [replyLoading, setReplyLoading] = useState(false);
   const [replyResult, setReplyResult] = useState<{ text: string; imapSaved?: boolean; smtpSent?: boolean; error?: string } | null>(null);
+  const [expandedCorr, setExpandedCorr] = useState<number | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -43,10 +47,15 @@ export default function ReservationDetailPage() {
   }, [hotelId, id]);
 
   const handleSearchMail = async (emailOverride?: string) => {
+    const resolvedEmail = emailOverride || reservation?.contact_email || '';
+    if (!resolvedEmail) {
+      load();
+      return;
+    }
     setMailLoading(true);
     try {
       await api.post(`/hotels/${hotelId}/reservations/${id}/search_mail/`, {
-        email: emailOverride || '',
+        email: resolvedEmail,
       });
       setTimeout(() => { load(); setMailLoading(false); }, 6000);
     } catch {
@@ -302,33 +311,59 @@ export default function ReservationDetailPage() {
                     <TableRow>
                       <TableCell>Data</TableCell>
                       <TableCell>Temat</TableCell>
-                      <TableCell>Treść</TableCell>
                       <TableCell align="right"></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {correspondence.map(c => (
-                      <TableRow key={c.id}>
-                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                          {new Date(c.date).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                        </TableCell>
-                        <TableCell>{c.subject}</TableCell>
-                        <TableCell sx={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {c.body}
-                        </TableCell>
-                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                          <IconButton
-                            size="small"
-                            title="Generuj odpowiedź AI"
-                            onClick={() => openReplyDialog(c.id, c.subject, c.sender_email)}
-                          >
-                            <Reply fontSize="small" />
-                          </IconButton>
-                          <IconButton size="small" onClick={() => handleDeleteCorrespondence(c.id)}>
-                            <Delete fontSize="small" />
-                          </IconButton>
-                        </TableCell>
-                      </TableRow>
+                      <>
+                        <TableRow
+                          key={c.id}
+                          hover
+                          sx={{ cursor: 'pointer', '& td': { borderBottom: expandedCorr === c.id ? 0 : undefined } }}
+                          onClick={() => setExpandedCorr(expandedCorr === c.id ? null : c.id)}
+                        >
+                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                            {new Date(c.date).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </TableCell>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              {expandedCorr === c.id
+                                ? <ExpandLess fontSize="small" sx={{ opacity: 0.5, flexShrink: 0 }} />
+                                : <ExpandMore fontSize="small" sx={{ opacity: 0.5, flexShrink: 0 }} />}
+                              <Typography variant="body2">{c.subject}</Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                            <IconButton
+                              size="small"
+                              title="Generuj odpowiedź AI"
+                              onClick={() => openReplyDialog(c.id, c.subject, c.sender_email)}
+                            >
+                              <Reply fontSize="small" />
+                            </IconButton>
+                            <IconButton size="small" onClick={() => handleDeleteCorrespondence(c.id)}>
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow key={`${c.id}-body`}>
+                          <TableCell colSpan={3} sx={{ p: 0, border: 0 }}>
+                            <Collapse in={expandedCorr === c.id} unmountOnExit>
+                              <Box sx={{ px: 2, py: 1.5, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider' }}>
+                                {c.sender_email && (
+                                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                                    Od: {c.sender_email}
+                                  </Typography>
+                                )}
+                                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                  {c.body}
+                                </Typography>
+                              </Box>
+                            </Collapse>
+                          </TableCell>
+                        </TableRow>
+                      </>
                     ))}
                   </TableBody>
                 </Table>
@@ -349,8 +384,8 @@ export default function ReservationDetailPage() {
                   <TableHead>
                     <TableRow>
                       <TableCell>Data</TableCell>
-                      <TableCell>Użytkownik</TableCell>
-                      <TableCell>Akcja</TableCell>
+                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Użytkownik</TableCell>
+                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Akcja</TableCell>
                       <TableCell>Zmiany</TableCell>
                     </TableRow>
                   </TableHead>
@@ -359,9 +394,12 @@ export default function ReservationDetailPage() {
                       <TableRow key={l.id}>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>
                           {new Date(l.created_at).toLocaleString('pl-PL')}
+                          <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'block', sm: 'none' } }}>
+                            {l.user_name} · {l.action}
+                          </Typography>
                         </TableCell>
-                        <TableCell>{l.user_name}</TableCell>
-                        <TableCell>{l.action}</TableCell>
+                        <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{l.user_name}</TableCell>
+                        <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{l.action}</TableCell>
                         <TableCell>
                           {l.changes && typeof l.changes === 'object' && Object.entries(l.changes).map(([k, v]) => (
                             <Typography key={k} variant="caption" display="block">
@@ -380,7 +418,7 @@ export default function ReservationDetailPage() {
       </Grid>
 
       {/* Reply Dialog */}
-      <Dialog open={!!replyDialog} onClose={() => { setReplyDialog(null); setReplyResult(null); }} maxWidth="sm" fullWidth>
+      <Dialog open={!!replyDialog} onClose={() => { setReplyDialog(null); setReplyResult(null); }} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>Generuj odpowiedź AI</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
           {!replyResult && (
@@ -456,7 +494,7 @@ export default function ReservationDetailPage() {
       </Dialog>
 
       {/* Edit Dialog */}
-      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>Edytuj rezerwację</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
           {editError && <Alert severity="error">{editError}</Alert>}

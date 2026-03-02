@@ -50,27 +50,39 @@ export default function Layout() {
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <AppBar position="fixed">
-        <Toolbar>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {weather && (
+        <Toolbar sx={{ minHeight: { xs: 52, sm: 64 } }}>
+          {/* Weather — pełny chip na sm+, tylko ikona+temp na xs */}
+          {weather && (
+            <>
               <Chip
                 icon={<>{weatherIcon}</>}
                 label={`${Math.round(weather.temp)}°C ${weather.description}`}
                 size="small"
                 variant="outlined"
-                sx={{ color: 'inherit', borderColor: 'rgba(255,255,255,0.5)' }}
+                sx={{ color: 'inherit', borderColor: 'rgba(255,255,255,0.5)', display: { xs: 'none', sm: 'flex' } }}
               />
-            )}
-            <Typography variant="body2" sx={{ opacity: 0.9 }}>
-              {now.format('dddd, D MMMM YYYY')}
-            </Typography>
-          </Box>
+              <Chip
+                icon={<>{weatherIcon}</>}
+                label={`${Math.round(weather.temp)}°C`}
+                size="small"
+                variant="outlined"
+                sx={{ color: 'inherit', borderColor: 'rgba(255,255,255,0.5)', display: { xs: 'flex', sm: 'none' } }}
+              />
+            </>
+          )}
+          {/* Data — ukryta na mobile */}
+          <Typography variant="body2" sx={{ opacity: 0.9, ml: 1, display: { xs: 'none', md: 'block' } }}>
+            {now.format('dddd, D MMMM YYYY')}
+          </Typography>
+
           <Box sx={{ flexGrow: 1 }} />
           <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 2 }}>
             LOCUS
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
-          <Typography variant="body2" sx={{ mr: 1, opacity: 0.8 }}>
+
+          {/* Username — ukryty na mobile */}
+          <Typography variant="body2" sx={{ mr: 1, opacity: 0.8, display: { xs: 'none', sm: 'block' } }}>
             {user?.username}
           </Typography>
           <IconButton color="inherit" onClick={() => setDrawerOpen(true)}>
@@ -81,6 +93,10 @@ export default function Layout() {
 
       <Drawer anchor="right" open={drawerOpen} onClose={() => setDrawerOpen(false)}>
         <Box sx={{ width: 250, pt: 2 }}>
+          {/* Username w menu na mobile */}
+          <Box sx={{ px: 2, pb: 1, display: { sm: 'none' } }}>
+            <Typography variant="body2" color="text.secondary">{user?.username}</Typography>
+          </Box>
           <List>
             <ListItemButton onClick={() => { navigate('/'); setDrawerOpen(false); }}>
               <ListItemIcon><HotelIcon /></ListItemIcon>
@@ -105,7 +121,7 @@ export default function Layout() {
         </Box>
       </Drawer>
 
-      <Box component="main" sx={{ flexGrow: 1, pt: 10, px: 3, pb: 3 }}>
+      <Box component="main" sx={{ flexGrow: 1, pt: { xs: 8, sm: 10 }, px: { xs: 1.5, sm: 3 }, pb: 3 }}>
         <Outlet />
       </Box>
     </Box>

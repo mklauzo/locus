@@ -16,4 +16,10 @@ app.conf.update(
     task_track_started=True,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    beat_schedule={
+        'poll-all-hotels-mail-every-5-minutes': {
+            'task': 'hotels.tasks.poll_all_hotels_mail',
+            'schedule': 300.0,
+        },
+    },
 )

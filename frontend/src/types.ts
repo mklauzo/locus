@@ -103,6 +103,7 @@ export interface Reservation {
   contact_email: string;
   contact_phone: string;
   is_settled: boolean;
+  has_new_mail: boolean;
   is_deleted: boolean;
   correspondence: MailCorrespondence[];
   audit_logs: AuditLogEntry[];

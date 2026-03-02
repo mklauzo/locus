@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useMediaQuery } from '@mui/material';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Typography, Button, Table, TableHead, TableRow, TableCell, TableBody,
@@ -7,20 +8,21 @@ import {
   useTheme,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { Add, Visibility, Delete, ArrowBack } from '@mui/icons-material';
+import { Add, Visibility, Delete, ArrowBack, MailOutline } from '@mui/icons-material';
 import api from '../api';
 import { Reservation, RoomSimple } from '../types';
 
 const emptyForm = {
-  room: '', guest_first_name: '', guest_last_name: '', companions: 0, animals: 0,
-  check_in: '', check_out: '', deposit_paid: false, deposit_amount: '0',
-  deposit_date: '', remaining_amount: '0', notes: '', contact_email: '', contact_phone: '',
+  room: '', guest_first_name: '', guest_last_name: '', companions: '' as any, animals: '' as any,
+  check_in: '', check_out: '', deposit_paid: false, deposit_amount: '',
+  deposit_date: '', remaining_amount: '', notes: '', contact_email: '', contact_phone: '',
 };
 
 export default function ReservationsPage() {
   const { hotelId } = useParams();
   const navigate = useNavigate();
   const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [rooms, setRooms] = useState<RoomSimple[]>([]);
   const [open, setOpen] = useState(false);
@@ -47,6 +49,12 @@ export default function ReservationsPage() {
 
   useEffect(() => { load(); }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo]);
 
+  // Auto-refresh every 60 seconds to pick up new mail flags
+  useEffect(() => {
+    const interval = setInterval(load, 60000);
+    return () => clearInterval(interval);
+  }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo]);
+
   const handleSave = async () => {
     setError('');
     const data = {
@@ -55,6 +63,8 @@ export default function ReservationsPage() {
       room: form.room ? Number(form.room) : undefined,
       companions: Number(form.companions),
       animals: Number(form.animals),
+      deposit_amount: form.deposit_amount || '0',
+      remaining_amount: form.remaining_amount || '0',
       deposit_date: form.deposit_date || null,
     };
     try {
@@ -99,11 +109,11 @@ export default function ReservationsPage() {
         </Button>
       </Typography>
 
-      <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'auto auto auto auto' }, gap: 1.5, mb: 2 }}>
         <TextField label="Szukaj gościa" size="small" value={filterGuest}
-          onChange={e => setFilterGuest(e.target.value)} />
+          onChange={e => setFilterGuest(e.target.value)} sx={{ gridColumn: { xs: '1 / -1', sm: 'auto' } }} />
         <TextField label="Pokój" size="small" select value={filterRoom}
-          onChange={e => setFilterRoom(e.target.value)} sx={{ minWidth: 120 }}>
+          onChange={e => setFilterRoom(e.target.value)}>
           <MenuItem value="">Wszystkie</MenuItem>
           {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number}</MenuItem>)}
         </TextField>
@@ -118,14 +128,13 @@ export default function ReservationsPage() {
           <TableHead>
             <TableRow>
               <TableCell>Gość</TableCell>
-              <TableCell>Pokój</TableCell>
-              <TableCell>Zameldowanie</TableCell>
-              <TableCell>Wymeldowanie</TableCell>
-              <TableCell>Dni</TableCell>
-              <TableCell>Zaliczka</TableCell>
-              <TableCell>Dopłata</TableCell>
-              <TableCell>Do zapłaty</TableCell>
-              <TableCell>Kontakt</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Pokój</TableCell>
+              <TableCell>Zameldowanie / Wyjazd</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Dni</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Zaliczka</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Dopłata</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Do zapłaty</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Kontakt</TableCell>
               <TableCell align="right">Akcje</TableCell>
             </TableRow>
           </TableHead>
@@ -135,28 +144,43 @@ export default function ReservationsPage() {
                 cursor: 'pointer',
                 bgcolor: r.is_settled
                   ? theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : '#f5f5f5'
-                  : alpha(theme.palette.primary.main, 0.08),
+                  : r.has_new_mail
+                    ? alpha(theme.palette.primary.main, 0.22)
+                    : alpha(theme.palette.primary.main, 0.08),
               }}
                 onClick={() => navigate(`/hotels/${hotelId}/reservations/${r.id}`)}>
-                <TableCell>{r.guest_name}</TableCell>
-                <TableCell>{r.room_number}</TableCell>
-                <TableCell>{r.check_in}</TableCell>
-                <TableCell>{r.check_out}</TableCell>
-                <TableCell>{r.days_count}</TableCell>
                 <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography variant="body2" fontWeight={500}>{r.guest_name}</Typography>
+                    {r.has_new_mail && (
+                      <MailOutline fontSize="small" color="primary" titleAccess="Nowy email" />
+                    )}
+                  </Box>
+                  {/* Na xs: pokaż pokój i daty pod nazwiskiem */}
+                  <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'block', sm: 'none' } }}>
+                    pok.{r.room_number} · {r.check_in} – {r.check_out}
+                  </Typography>
+                </TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{r.room_number}</TableCell>
+                <TableCell>
+                  <Box>{r.check_in}</Box>
+                  <Typography variant="caption" color="text.secondary">{r.check_out}</Typography>
+                </TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{r.days_count}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
                   {r.deposit_paid
                     ? <Chip label={`${r.deposit_amount} zł`} color={r.is_settled ? 'default' : 'success'} size="small" />
                     : <Chip label="Brak" size="small" />}
                 </TableCell>
-                <TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
                   <Chip label={`${(parseFloat(r.remaining_amount || '0') - parseFloat(r.deposit_amount || '0')).toFixed(2)} zł`}
                     color={r.is_settled ? 'default' : 'warning'} size="small" />
                 </TableCell>
-                <TableCell>
+                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
                   <Chip label={`${r.remaining_amount} zł`}
                     color={r.is_settled ? 'default' : 'error'} size="small" />
                 </TableCell>
-                <TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
                   {r.contact_email && <Typography variant="caption" display="block">{r.contact_email}</Typography>}
                   {r.contact_phone && <Typography variant="caption" display="block">{r.contact_phone}</Typography>}
                 </TableCell>
@@ -174,7 +198,7 @@ export default function ReservationsPage() {
         </Table>
       </TableContainer>
 
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>{editId ? 'Edytuj rezerwację' : 'Nowa rezerwacja'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
           {error && <Alert severity="error">{error}</Alert>}

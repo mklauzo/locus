@@ -14,7 +14,7 @@ from .serializers import (
     ReservationSerializer, ReservationListSerializer, CalendarSerializer,
     MailCorrespondenceSerializer, AIAssistantSerializer, AIAssistantDocumentSerializer,
 )
-from .tasks import search_mail_for_reservation
+from .tasks import search_mail_for_reservation, send_deposit_confirmation, _call_llm_api
 
 User = get_user_model()
 
@@ -197,6 +197,14 @@ class ReservationViewSet(viewsets.ModelViewSet):
             return ReservationListSerializer
         return ReservationSerializer
 
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.has_new_mail:
+            instance.has_new_mail = False
+            instance.save(update_fields=['has_new_mail'])
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
     def get_queryset(self):
         qs = Reservation.objects.filter(
             hotel_id=self.kwargs['hotel_pk'],
@@ -244,6 +252,13 @@ class ReservationViewSet(viewsets.ModelViewSet):
                 action='update',
                 changes=changes,
             )
+
+        # Send confirmation email when deposit is first recorded
+        deposit_just_paid = (
+            not old_data.get('deposit_paid') and new_data.get('deposit_paid')
+        )
+        if deposit_just_paid and reservation.contact_email:
+            send_deposit_confirmation.delay(reservation.id)
 
     def perform_destroy(self, instance):
         instance.is_deleted = True
@@ -326,91 +341,6 @@ def _extract_file_content(uploaded_file):
         return f'[Plik: {uploaded_file.name}]'
 
 
-def _call_llm_api(llm_model, api_key, system_prompt, user_message, ollama_url='http://ollama:11434'):
-    """Call LLM API (OpenAI, Anthropic, Google Gemini or Ollama) and return generated text."""
-    import urllib.request
-    import urllib.error
-    import json as json_lib
-
-    if llm_model.startswith('claude'):
-        url = 'https://api.anthropic.com/v1/messages'
-        headers = {
-            'x-api-key': api_key,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-        }
-        payload = {
-            'model': llm_model,
-            'max_tokens': 1024,
-            'system': system_prompt,
-            'messages': [{'role': 'user', 'content': user_message}],
-        }
-    elif llm_model.startswith('gemini'):
-        url = f'https://generativelanguage.googleapis.com/v1beta/models/{llm_model}:generateContent?key={api_key}'
-        headers = {'Content-Type': 'application/json'}
-        full_message = f'{system_prompt}\n\n{user_message}' if system_prompt else user_message
-        payload = {
-            'contents': [{'role': 'user', 'parts': [{'text': full_message}]}],
-            'generationConfig': {'maxOutputTokens': 4096},
-        }
-    elif llm_model.startswith('ollama:'):
-        actual_model = llm_model[len('ollama:'):]
-        base_url = (ollama_url or 'http://ollama:11434').rstrip('/')
-        url = f'{base_url}/api/chat'
-        headers = {'Content-Type': 'application/json'}
-        messages = []
-        if system_prompt:
-            messages.append({'role': 'system', 'content': system_prompt})
-        messages.append({'role': 'user', 'content': user_message})
-        payload = {'model': actual_model, 'messages': messages, 'stream': False}
-    else:
-        url = 'https://api.openai.com/v1/chat/completions'
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-        }
-        payload = {
-            'model': llm_model,
-            'messages': [
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_message},
-            ],
-            'max_tokens': 1024,
-        }
-
-    req = urllib.request.Request(
-        url,
-        data=json_lib.dumps(payload).encode('utf-8'),
-        headers=headers,
-        method='POST',
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=240) as resp:
-            result = json_lib.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='replace')
-        raise Exception(f'Błąd API ({e.code}) [{url}]: {error_body[:500]}')
-    except Exception as e:
-        raise Exception(f'Błąd połączenia z {url}: {str(e)}')
-
-    if llm_model.startswith('claude'):
-        return result['content'][0]['text']
-    if llm_model.startswith('gemini'):
-        candidates = result.get('candidates') or []
-        if not candidates:
-            prompt_feedback = result.get('promptFeedback', {})
-            block_reason = prompt_feedback.get('blockReason', 'brak kandydatów w odpowiedzi')
-            raise Exception(f'Gemini nie zwrócił odpowiedzi: {block_reason}')
-        candidate = candidates[0]
-        content = candidate.get('content') or {}
-        parts = content.get('parts') or []
-        if parts:
-            return parts[0].get('text', '')
-        finish_reason = candidate.get('finishReason', 'nieznany powód')
-        raise Exception(f'Gemini zwrócił pustą odpowiedź (finishReason: {finish_reason})')
-    if llm_model.startswith('ollama:'):
-        return result['message']['content']
-    return result['choices'][0]['message']['content']
 
 
 @api_view(['POST'])
@@ -648,12 +578,23 @@ def generate_email_reply(request, hotel_pk, reservation_pk, pk):
     if docs_context:
         system += f'\n\nDodatkowe informacje o hotelu:\n{docs_context}'
 
+    deposit_status = (
+        f'wpłacona ({reservation.deposit_amount} zł, dnia {reservation.deposit_date})'
+        if reservation.deposit_paid and reservation.deposit_date
+        else f'wpłacona ({reservation.deposit_amount} zł)'
+        if reservation.deposit_paid
+        else 'nie wpłacona'
+    )
     reservation_info = (
         f'Hotel: {hotel.name}\n'
         f'Gość: {reservation.guest_name}\n'
         f'Pokój: {reservation.room.number}\n'
         f'Przyjazd: {reservation.check_in}\n'
         f'Wyjazd: {reservation.check_out}\n'
+        f'Liczba dni: {reservation.days_count}\n'
+        f'Zaliczka: {deposit_status}\n'
+        f'Kwota do zapłaty łącznie: {reservation.remaining_amount} zł\n'
+        f'Status rozliczenia: {"rozliczona" if reservation.is_settled else "nierozliczona"}\n'
     )
 
     user_message = (
