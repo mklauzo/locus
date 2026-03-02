@@ -6,7 +6,7 @@ import {
   FormControlLabel, Checkbox, Table, TableHead, TableRow, TableCell, TableBody,
   Alert, CircularProgress, IconButton, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply } from '@mui/icons-material';
+import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply, Refresh } from '@mui/icons-material';
 import api from '../api';
 import { Reservation, RoomSimple } from '../types';
 
@@ -48,7 +48,7 @@ export default function ReservationDetailPage() {
       await api.post(`/hotels/${hotelId}/reservations/${id}/search_mail/`, {
         email: emailOverride || '',
       });
-      setTimeout(() => { load(); setMailLoading(false); }, 3000);
+      setTimeout(() => { load(); setMailLoading(false); }, 6000);
     } catch {
       setMailLoading(false);
     }
@@ -281,9 +281,19 @@ export default function ReservationDetailPage() {
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-                Historia korespondencji ({correspondence.length})
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Historia korespondencji ({correspondence.length})
+                </Typography>
+                <IconButton
+                  size="small"
+                  title="Pobierz nowe emaile z IMAP i odśwież"
+                  disabled={mailLoading}
+                  onClick={() => handleSearchMail()}
+                >
+                  {mailLoading ? <CircularProgress size={16} /> : <Refresh fontSize="small" />}
+                </IconButton>
+              </Box>
               {correspondence.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">Brak korespondencji</Typography>
               ) : (

@@ -137,9 +137,9 @@ class HotelViewSet(viewsets.ModelViewSet):
             server.quit()
             return Response({'status': 'ok', 'message': 'Połączenie SMTP OK.'})
         except smtplib.SMTPAuthenticationError as e:
-            return Response({'status': 'error', 'message': f'Błąd logowania SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': 'error', 'message': f'Błąd logowania SMTP ({login}@{host}:{port}): {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({'status': 'error', 'message': f'Błąd połączenia SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': 'error', 'message': f'Błąd połączenia SMTP ({host}:{port}): {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def test_imap(self, request, pk=None):
@@ -326,7 +326,7 @@ def _extract_file_content(uploaded_file):
         return f'[Plik: {uploaded_file.name}]'
 
 
-def _call_llm_api(llm_model, api_key, system_prompt, user_message, ollama_url='http://localhost:11434'):
+def _call_llm_api(llm_model, api_key, system_prompt, user_message, ollama_url='http://ollama:11434'):
     """Call LLM API (OpenAI, Anthropic, Google Gemini or Ollama) and return generated text."""
     import urllib.request
     import urllib.error
@@ -351,11 +351,11 @@ def _call_llm_api(llm_model, api_key, system_prompt, user_message, ollama_url='h
         full_message = f'{system_prompt}\n\n{user_message}' if system_prompt else user_message
         payload = {
             'contents': [{'role': 'user', 'parts': [{'text': full_message}]}],
-            'generationConfig': {'maxOutputTokens': 1024},
+            'generationConfig': {'maxOutputTokens': 4096},
         }
     elif llm_model.startswith('ollama:'):
         actual_model = llm_model[len('ollama:'):]
-        base_url = (ollama_url or 'http://localhost:11434').rstrip('/')
+        base_url = (ollama_url or 'http://ollama:11434').rstrip('/')
         url = f'{base_url}/api/chat'
         headers = {'Content-Type': 'application/json'}
         messages = []
@@ -385,16 +385,29 @@ def _call_llm_api(llm_model, api_key, system_prompt, user_message, ollama_url='h
         method='POST',
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=240) as resp:
             result = json_lib.loads(resp.read())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
-        raise Exception(f'Błąd API ({e.code}): {error_body[:500]}')
+        raise Exception(f'Błąd API ({e.code}) [{url}]: {error_body[:500]}')
+    except Exception as e:
+        raise Exception(f'Błąd połączenia z {url}: {str(e)}')
 
     if llm_model.startswith('claude'):
         return result['content'][0]['text']
     if llm_model.startswith('gemini'):
-        return result['candidates'][0]['content']['parts'][0]['text']
+        candidates = result.get('candidates') or []
+        if not candidates:
+            prompt_feedback = result.get('promptFeedback', {})
+            block_reason = prompt_feedback.get('blockReason', 'brak kandydatów w odpowiedzi')
+            raise Exception(f'Gemini nie zwrócił odpowiedzi: {block_reason}')
+        candidate = candidates[0]
+        content = candidate.get('content') or {}
+        parts = content.get('parts') or []
+        if parts:
+            return parts[0].get('text', '')
+        finish_reason = candidate.get('finishReason', 'nieznany powód')
+        raise Exception(f'Gemini zwrócił pustą odpowiedź (finishReason: {finish_reason})')
     if llm_model.startswith('ollama:'):
         return result['message']['content']
     return result['choices'][0]['message']['content']
@@ -409,7 +422,7 @@ def fetch_llm_models(request):
 
     provider = request.data.get('provider', '')
     api_key = request.data.get('api_key', '')
-    ollama_url = (request.data.get('ollama_url', '') or 'http://localhost:11434').rstrip('/')
+    ollama_url = (request.data.get('ollama_url', '') or 'http://ollama:11434').rstrip('/')
 
     try:
         if provider == 'openai':
@@ -438,6 +451,8 @@ def fetch_llm_models(request):
             ])
 
         elif provider == 'gemini':
+            if not api_key:
+                return Response({'detail': 'Wymagany klucz API Google (AIza...).'}, status=status.HTTP_400_BAD_REQUEST)
             req = urllib.request.Request(
                 f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}',
             )
@@ -652,9 +667,11 @@ def generate_email_reply(request, hotel_pk, reservation_pk, pk):
     try:
         reply_text = _call_llm_api(
             assistant.llm_model, assistant.llm_api_key, system, user_message,
-            ollama_url=assistant.ollama_url or 'http://localhost:11434',
+            ollama_url=assistant.ollama_url or 'http://ollama:11434',
         )
     except Exception as e:
+        import traceback
+        print(f'[AI REPLY ERROR] model={assistant.llm_model} url={assistant.ollama_url}: {e}\n{traceback.format_exc()}', flush=True)
         return Response({'detail': f'Błąd generowania odpowiedzi: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
     # Send via SMTP or save to IMAP Drafts
@@ -746,9 +763,9 @@ def test_smtp_standalone(request):
         server.quit()
         return Response({'status': 'ok', 'message': 'Połączenie SMTP OK.'})
     except smtplib.SMTPAuthenticationError as e:
-        return Response({'status': 'error', 'message': f'Błąd logowania SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'status': 'error', 'message': f'Błąd logowania SMTP ({login}@{host}:{port}): {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return Response({'status': 'error', 'message': f'Błąd połączenia SMTP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'status': 'error', 'message': f'Błąd połączenia SMTP ({host}:{port}): {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # --- IMAP test (standalone, no hotel needed) ---

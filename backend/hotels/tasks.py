@@ -125,13 +125,16 @@ def search_mail_for_reservation(self, reservation_id, search_term):
             return sender_email
 
         # Phase 1: Search by name/term in subject and body
-        _, message_ids = mail.search(None, f'(SINCE {since_date} OR SUBJECT "{search_term}" BODY "{search_term}")')
+        _, message_ids = mail.search(None, f'SINCE {since_date} OR SUBJECT "{search_term}" BODY "{search_term}"')
 
         sender_emails = set()
         for msg_id in message_ids[0].split():
-            result = process_message(msg_id)
-            if result and result.lower() != hotel.email.lower():
-                sender_emails.add(result.lower())
+            try:
+                result = process_message(msg_id)
+                if result and result.lower() != hotel.email.lower():
+                    sender_emails.add(result.lower())
+            except Exception:
+                pass
 
         # Phase 2: Search by discovered sender email addresses
         # Also search by contact_email if already set on reservation
@@ -139,9 +142,12 @@ def search_mail_for_reservation(self, reservation_id, search_term):
             sender_emails.add(reservation.contact_email.lower())
 
         for sender_addr in sender_emails:
-            _, email_msg_ids = mail.search(None, f'(SINCE {since_date} FROM "{sender_addr}")')
+            _, email_msg_ids = mail.search(None, f'SINCE {since_date} FROM "{sender_addr}"')
             for msg_id in email_msg_ids[0].split():
-                process_message(msg_id)
+                try:
+                    process_message(msg_id)
+                except Exception:
+                    pass
 
         mail.logout()
 

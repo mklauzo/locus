@@ -155,3 +155,24 @@ docker compose down
 # Zatrzymaj i usuń wszystkie dane (baza, Redis, modele Ollama)
 docker compose down -v
 ```
+
+## Zmiana hasła użytkownika admin
+
+**Opcja 1 — management command (zalecana):**
+```bash
+docker compose exec backend python manage.py changepassword admin
+```
+
+**Opcja 2 — Django shell:**
+```bash
+docker compose exec backend python manage.py shell -c "
+from django.contrib.auth import get_user_model
+u = get_user_model().objects.get(username='admin')
+u.set_password('nowe_haslo')
+u.save()
+"
+```
+
+**Opcja 3 — panel admina:**
+
+Wejdź na `http://localhost:8088/admin/` → **Users** → **admin** → zmień hasło.
