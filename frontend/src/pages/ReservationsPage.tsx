@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMediaQuery } from '@mui/material';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Typography, Button, Table, TableHead, TableRow, TableCell, TableBody,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
@@ -15,14 +15,14 @@ import { Reservation, Room } from '../types';
 const PL_MONTHS = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
   'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
 
-// Returns: number = calculated price, string = unavailability error, null = no pricing configured (no restriction)
+// Returns: number = calculated price, string = unavailability error, null = room/dates not yet selected
 function calcPrice(rooms: Room[], roomId: string, checkIn: string, checkOut: string): number | string | null {
   const room = rooms.find(r => r.id === Number(roomId));
-  if (!room || !room.pricing || room.pricing.length === 0) return null;
+  if (!room) return null;
   if (!checkIn || !checkOut) return null;
 
   const pricingMap: Record<number, number> = {};
-  room.pricing.forEach(p => {
+  (room.pricing || []).forEach(p => {
     if (Number(p.price_per_night) > 0) pricingMap[p.month] = Number(p.price_per_night);
   });
 
@@ -52,6 +52,7 @@ const emptyForm = {
 export default function ReservationsPage() {
   const { hotelId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -79,6 +80,18 @@ export default function ReservationsPage() {
   useEffect(() => {
     api.get(`/hotels/${hotelId}/rooms/`).then(r => setRooms(r.data.results || r.data));
   }, [hotelId]);
+
+  useEffect(() => {
+    const state = location.state as { openNew?: boolean; email?: string } | null;
+    if (state?.openNew) {
+      setForm({ ...emptyForm, contact_email: state.email || '' });
+      setEditId(null);
+      setPriceAutoCalc(false);
+      setUnavailableError('');
+      setOpen(true);
+      window.history.replaceState({}, '');
+    }
+  }, [location.state]);
 
   useEffect(() => { load(); }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo]);
 

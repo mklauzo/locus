@@ -178,22 +178,21 @@ class ReservationSerializer(serializers.ModelSerializer):
             if overlapping.exists():
                 raise serializers.ValidationError("Pokój jest zajęty w wybranym terminie.")
 
-        # If room has any pricing configured, reject dates with missing monthly price
+        # Reject dates where room has no price for a given month (missing price = closed)
         if room and check_in and check_out:
             from datetime import timedelta
             priced_months = set(
                 RoomPricing.objects.filter(room=room, price_per_night__gt=0).values_list('month', flat=True)
             )
-            if priced_months:
-                pl_months = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
-                             'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
-                current = check_in
-                while current < check_out:
-                    if current.month not in priced_months:
-                        raise serializers.ValidationError(
-                            f"Pokój niedostępny w {pl_months[current.month]} — brak cennika dla tego miesiąca."
-                        )
-                    current += timedelta(days=1)
+            pl_months = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
+                         'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
+            current = check_in
+            while current < check_out:
+                if current.month not in priced_months:
+                    raise serializers.ValidationError(
+                        f"Pokój niedostępny w {pl_months[current.month]} — brak cennika dla tego miesiąca."
+                    )
+                current += timedelta(days=1)
 
         return data
 

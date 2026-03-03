@@ -5,7 +5,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, List, ListItem, ListItemText,
 } from '@mui/material';
 import {
-  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, Inbox, Search,
+  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search,
 } from '@mui/icons-material';
 import api from '../api';
 import { Hotel } from '../types';
@@ -31,6 +31,8 @@ export default function HotelDetailPage() {
   const [inquiries, setInquiries] = useState<Inquiry[] | null>(null);
   const [inquiriesLoading, setInquiriesLoading] = useState(false);
   const [inquiriesError, setInquiriesError] = useState<string | null>(null);
+  const [emailChecking, setEmailChecking] = useState<string | null>(null);
+  const [emailExistsDialog, setEmailExistsDialog] = useState<{ email: string; reservations: any[] } | null>(null);
 
   useEffect(() => {
     api.get(`/hotels/${id}/`).then(r => setHotel(r.data));
@@ -74,6 +76,25 @@ export default function HotelDetailPage() {
       setInquiriesError(err.response?.data?.detail || 'Błąd wyszukiwania zapytań.');
     } finally {
       setInquiriesLoading(false);
+    }
+  };
+
+  const handleInquiryAction = async (email: string) => {
+    setEmailChecking(email);
+    try {
+      const res = await api.get(`/hotels/${id}/reservations/?search=${encodeURIComponent(email)}`);
+      const results = res.data.results || res.data;
+      if (results.length > 0) {
+        setEmailExistsDialog({ email, reservations: results });
+      } else {
+        setInquiriesOpen(false);
+        navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email } });
+      }
+    } catch {
+      setInquiriesOpen(false);
+      navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email } });
+    } finally {
+      setEmailChecking(null);
     }
   };
 
@@ -190,7 +211,7 @@ export default function HotelDetailPage() {
               onClick={() => setInquiriesOpen(true)}
             >
               <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <Inbox sx={{ fontSize: 48, color: 'warning.main', mb: 1 }} />
+                <MailOutline sx={{ fontSize: 48, color: 'warning.main', mb: 1 }} />
                 <Typography variant="h6">Nowe zapytania</Typography>
                 <Typography variant="body2" color="text.secondary">
                   Sprawdź nieznanych nadawców
@@ -261,11 +282,13 @@ export default function HotelDetailPage() {
                   />
                   <Button
                     size="small"
-                    variant="outlined"
+                    variant="contained"
                     sx={{ flexShrink: 0, alignSelf: 'flex-start', mt: 0.5 }}
-                    onClick={() => navigator.clipboard.writeText(inq.from_email)}
+                    disabled={emailChecking === inq.from_email}
+                    startIcon={emailChecking === inq.from_email ? <CircularProgress size={14} color="inherit" /> : undefined}
+                    onClick={() => handleInquiryAction(inq.from_email)}
                   >
-                    Kopiuj e-mail
+                    Dodaj gościa
                   </Button>
                 </ListItem>
               ))}
@@ -274,6 +297,41 @@ export default function HotelDetailPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setInquiriesOpen(false)}>Zamknij</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!emailExistsDialog} onClose={() => setEmailExistsDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Email już przypisany do rezerwacji</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mb: 1.5 }}>
+            Adres <strong>{emailExistsDialog?.email}</strong> jest już powiązany z{' '}
+            {emailExistsDialog?.reservations.length === 1 ? 'rezerwacją' : 'rezerwacjami'}:
+          </Typography>
+          <List dense disablePadding>
+            {emailExistsDialog?.reservations.map((r: any) => (
+              <ListItem key={r.id} disableGutters>
+                <ListItemText
+                  primary={r.guest_name}
+                  secondary={`Pokój ${r.room_number} · ${r.check_in} – ${r.check_out}`}
+                />
+              </ListItem>
+            ))}
+          </List>
+          <Typography sx={{ mt: 1.5 }}>Czy chcesz dodać nową rezerwację dla tego gościa?</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEmailExistsDialog(null)}>Anuluj</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const email = emailExistsDialog?.email || '';
+              setEmailExistsDialog(null);
+              setInquiriesOpen(false);
+              navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email } });
+            }}
+          >
+            Nowa rezerwacja
+          </Button>
         </DialogActions>
       </Dialog>
     </>

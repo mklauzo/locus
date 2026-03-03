@@ -7,9 +7,59 @@ import {
   Alert, CircularProgress, IconButton, ToggleButton, ToggleButtonGroup,
   useMediaQuery, useTheme, Collapse,
 } from '@mui/material';
-import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply, Refresh, ExpandMore, ExpandLess } from '@mui/icons-material';
+import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply, Refresh, ExpandMore, ExpandLess, Send, AutoAwesome } from '@mui/icons-material';
 import api from '../api';
-import { Reservation, RoomSimple } from '../types';
+import { Reservation, Room } from '../types';
+
+const PL_MONTHS = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
+  'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
+
+function calcPrice(rooms: Room[], roomId: number | string, checkIn: string, checkOut: string): number | string | null {
+  const room = rooms.find(r => r.id === Number(roomId));
+  if (!room) return null;
+  if (!checkIn || !checkOut) return null;
+  const pricingMap: Record<number, number> = {};
+  (room.pricing || []).forEach(p => {
+    if (Number(p.price_per_night) > 0) pricingMap[p.month] = Number(p.price_per_night);
+  });
+  const start = new Date(checkIn);
+  const end = new Date(checkOut);
+  if (end <= start) return null;
+  let total = 0;
+  const cur = new Date(start);
+  while (cur < end) {
+    const month = cur.getMonth() + 1;
+    if (!(month in pricingMap)) return `Pokój niedostępny w ${PL_MONTHS[month]} — brak cennika dla tego miesiąca.`;
+    total += pricingMap[month];
+    cur.setDate(cur.getDate() + 1);
+  }
+  return total;
+}
+
+interface MonthBreakdown { month: number; month_name: string; nights: number; rate: number; amount: number; }
+
+function getPriceBreakdown(rooms: Room[], roomId: number | string, checkIn: string, checkOut: string): MonthBreakdown[] | null {
+  const room = rooms.find(r => r.id === Number(roomId));
+  if (!room || !checkIn || !checkOut) return null;
+  const pricingMap: Record<number, number> = {};
+  (room.pricing || []).forEach(p => { if (Number(p.price_per_night) > 0) pricingMap[p.month] = Number(p.price_per_night); });
+  if (Object.keys(pricingMap).length === 0) return null;
+  const start = new Date(checkIn);
+  const end = new Date(checkOut);
+  if (end <= start) return null;
+  const monthly: Record<number, number> = {};
+  const cur = new Date(start);
+  while (cur < end) {
+    const m = cur.getMonth() + 1;
+    monthly[m] = (monthly[m] || 0) + 1;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return Object.entries(monthly).map(([m, nights]) => {
+    const month = Number(m);
+    const rate = pricingMap[month] || 0;
+    return { month, month_name: PL_MONTHS[month], nights, rate, amount: nights * rate };
+  });
+}
 
 export default function ReservationDetailPage() {
   const { hotelId, id } = useParams();
@@ -17,7 +67,9 @@ export default function ReservationDetailPage() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [reservation, setReservation] = useState<Reservation | null>(null);
-  const [rooms, setRooms] = useState<RoomSimple[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [editPriceAutoCalc, setEditPriceAutoCalc] = useState(false);
+  const [editUnavailableError, setEditUnavailableError] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [mailLoading, setMailLoading] = useState(false);
   const [mailEmail, setMailEmail] = useState('');
@@ -29,7 +81,15 @@ export default function ReservationDetailPage() {
   const [replyToEmail, setReplyToEmail] = useState('');
   const [replyMode, setReplyMode] = useState<'imap' | 'smtp'>('smtp');
   const [replyLoading, setReplyLoading] = useState(false);
-  const [replyResult, setReplyResult] = useState<{ text: string; imapSaved?: boolean; smtpSent?: boolean; error?: string } | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [replyResult, setReplyResult] = useState<{ imapSaved?: boolean; smtpSent?: boolean; error?: string } | null>(null);
+
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeForm, setComposeForm] = useState({ to: '', subject: '', body: '' });
+  const [composeAiPurpose, setComposeAiPurpose] = useState('');
+  const [composeSending, setComposeSending] = useState(false);
+  const [composeAiLoading, setComposeAiLoading] = useState(false);
+  const [composeResult, setComposeResult] = useState<{ sent?: boolean; error?: string } | null>(null);
   const [expandedCorr, setExpandedCorr] = useState<number | null>(null);
 
   const load = () => {
@@ -71,9 +131,28 @@ export default function ReservationDetailPage() {
     } catch {}
   };
 
+  const applyAutoPrice = (patch: Record<string, any>, currentForm = form) => {
+    const merged = { ...currentForm, ...patch };
+    const price = calcPrice(rooms, merged.room, merged.check_in, merged.check_out);
+    if (typeof price === 'string') {
+      setEditUnavailableError(price);
+      setEditPriceAutoCalc(false);
+      return { ...merged, remaining_amount: '' };
+    }
+    setEditUnavailableError('');
+    if (typeof price === 'number') {
+      setEditPriceAutoCalc(true);
+      return { ...merged, remaining_amount: String(price) };
+    }
+    setEditPriceAutoCalc(false);
+    return merged;
+  };
+
   const handleEdit = () => {
     if (!reservation) return;
     setEditError('');
+    setEditPriceAutoCalc(false);
+    setEditUnavailableError('');
     setForm({
       room: reservation.room,
       guest_first_name: reservation.guest_first_name,
@@ -128,6 +207,7 @@ export default function ReservationDetailPage() {
   const openReplyDialog = (corrId: number, subject: string, senderEmail: string) => {
     setReplyToEmail(senderEmail || reservation?.contact_email || '');
     setReplyResult(null);
+    setReplyText('');
     setReplyDialog({ corrId, subject, senderEmail });
   };
 
@@ -138,19 +218,74 @@ export default function ReservationDetailPage() {
     try {
       const res = await api.post(
         `/hotels/${hotelId}/reservations/${id}/correspondence/${replyDialog.corrId}/reply/`,
-        { to_email: replyToEmail, send_via_smtp: replyMode === 'smtp' },
+        { to_email: replyToEmail, generate_only: true },
+      );
+      setReplyText(res.data.reply_text || '');
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Błąd generowania odpowiedzi.';
+      setReplyResult({ error: msg });
+    } finally {
+      setReplyLoading(false);
+    }
+  };
+
+  const handleSendReply = async () => {
+    if (!replyDialog || !replyText) return;
+    setReplyLoading(true);
+    try {
+      const res = await api.post(
+        `/hotels/${hotelId}/reservations/${id}/correspondence/${replyDialog.corrId}/reply/`,
+        { to_email: replyToEmail, send_via_smtp: replyMode === 'smtp', reply_text: replyText },
       );
       setReplyResult({
-        text: res.data.reply_text,
         imapSaved: res.data.imap_saved,
         smtpSent: res.data.smtp_sent,
         error: res.data.imap_error || res.data.smtp_error,
       });
     } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Błąd generowania odpowiedzi.';
-      setReplyResult({ text: '', error: msg });
+      const msg = err.response?.data?.detail || 'Błąd wysyłania.';
+      setReplyResult({ error: msg });
     } finally {
       setReplyLoading(false);
+    }
+  };
+
+  const openCompose = () => {
+    setComposeForm({ to: reservation?.contact_email || '', subject: '', body: '' });
+    setComposeAiPurpose('');
+    setComposeResult(null);
+    setComposeOpen(true);
+  };
+
+  const handleAiDraft = async () => {
+    setComposeAiLoading(true);
+    try {
+      const res = await api.post(`/hotels/${hotelId}/reservations/${id}/generate-message/`, {
+        purpose: composeAiPurpose,
+      });
+      setComposeForm(f => ({ ...f, body: res.data.draft || '' }));
+    } catch (err: any) {
+      setComposeResult({ error: err.response?.data?.detail || 'Błąd generowania szkicu.' });
+    } finally {
+      setComposeAiLoading(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    setComposeSending(true);
+    setComposeResult(null);
+    try {
+      await api.post(`/hotels/${hotelId}/reservations/${id}/send-message/`, {
+        to_email: composeForm.to,
+        subject: composeForm.subject,
+        body: composeForm.body,
+      });
+      setComposeResult({ sent: true });
+      load();
+    } catch (err: any) {
+      setComposeResult({ error: err.response?.data?.detail || 'Błąd wysyłania.' });
+    } finally {
+      setComposeSending(false);
     }
   };
 
@@ -182,8 +317,9 @@ export default function ReservationDetailPage() {
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5">{reservation.guest_name}</Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button variant="outlined" startIcon={<Edit />} onClick={handleEdit}>Edytuj</Button>
+          <Button variant="outlined" startIcon={<Send />} onClick={openCompose}>Napisz wiadomość</Button>
           <Button variant="outlined" startIcon={mailLoading ? <CircularProgress size={20} /> : <History />}
             onClick={() => handleSearchMail()} disabled={mailLoading}>
             Historia
@@ -206,6 +342,31 @@ export default function ReservationDetailPage() {
                 <Typography variant="body2" fontWeight={600}>{reservation.check_out}</Typography>
                 <Typography variant="body2">Liczba dni:</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.days_count}</Typography>
+                {(() => {
+                  const breakdown = getPriceBreakdown(rooms, reservation.room, reservation.check_in, reservation.check_out);
+                  if (!breakdown || breakdown.length === 0) return null;
+                  return (
+                    <>
+                      <Typography variant="body2" sx={{ gridColumn: '1 / -1', mt: 0.5 }} color="text.secondary">Cennik:</Typography>
+                      {breakdown.map(b => (
+                        <>
+                          <Typography key={`${b.month}-label`} variant="body2" color="text.secondary" sx={{ pl: 1 }}>
+                            {b.month_name} ({b.nights} noc{b.nights === 1 ? '' : b.nights < 5 ? 'e' : 'y'} × {b.rate} zł):
+                          </Typography>
+                          <Typography key={`${b.month}-val`} variant="body2" fontWeight={500}>{b.amount} zł</Typography>
+                        </>
+                      ))}
+                      {breakdown.length > 1 && (
+                        <>
+                          <Typography variant="body2" fontWeight={600}>Razem (cennik):</Typography>
+                          <Typography variant="body2" fontWeight={600}>
+                            {breakdown.reduce((s, b) => s + b.amount, 0)} zł
+                          </Typography>
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
                 <Typography variant="body2">Osoby towarzyszące:</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.companions}</Typography>
                 <Typography variant="body2">Zwierzęta:</Typography>
@@ -418,76 +579,148 @@ export default function ReservationDetailPage() {
       </Grid>
 
       {/* Reply Dialog */}
-      <Dialog open={!!replyDialog} onClose={() => { setReplyDialog(null); setReplyResult(null); }} maxWidth="sm" fullWidth fullScreen={isMobile}>
-        <DialogTitle>Generuj odpowiedź AI</DialogTitle>
+      <Dialog open={!!replyDialog} onClose={() => { setReplyDialog(null); setReplyResult(null); setReplyText(''); }} maxWidth="sm" fullWidth fullScreen={isMobile}>
+        <DialogTitle>Odpowiedź AI</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
-          {!replyResult && (
-            <>
-              <TextField
-                label="Adres e-mail odbiorcy"
-                value={replyToEmail}
-                onChange={e => setReplyToEmail(e.target.value)}
-                fullWidth
-                placeholder="email@gości.pl"
-              />
-              <ToggleButtonGroup
-                value={replyMode}
-                exclusive
-                onChange={(_, v) => { if (v) setReplyMode(v); }}
-                size="small"
-                fullWidth
-              >
-                <ToggleButton value="smtp" sx={{ flex: 1 }}>
-                  Wyślij emailem (SMTP)
-                </ToggleButton>
-                <ToggleButton value="imap" sx={{ flex: 1 }}>
-                  Zapisz do roboczych (IMAP)
-                </ToggleButton>
-              </ToggleButtonGroup>
-              <Alert severity="info">
-                {replyMode === 'smtp'
-                  ? 'Email zostanie wysłany bezpośrednio do gościa przez serwer SMTP hotelu.'
-                  : 'Odpowiedź zostanie zapisana w folderze Wersje robocze na skrzynce hotelu.'}
-              </Alert>
-            </>
+          <TextField
+            label="Adres e-mail odbiorcy"
+            value={replyToEmail}
+            onChange={e => setReplyToEmail(e.target.value)}
+            fullWidth
+            placeholder="email@gości.pl"
+            disabled={!!replyResult}
+          />
+          <ToggleButtonGroup
+            value={replyMode}
+            exclusive
+            onChange={(_, v) => { if (v) setReplyMode(v); }}
+            size="small"
+            fullWidth
+            disabled={!!replyResult}
+          >
+            <ToggleButton value="smtp" sx={{ flex: 1 }}>Wyślij emailem (SMTP)</ToggleButton>
+            <ToggleButton value="imap" sx={{ flex: 1 }}>Zapisz do roboczych (IMAP)</ToggleButton>
+          </ToggleButtonGroup>
+
+          {replyResult?.error && <Alert severity="error">{replyResult.error}</Alert>}
+          {replyResult?.smtpSent && <Alert severity="success">Email wysłany do {replyToEmail}.</Alert>}
+          {replyResult?.imapSaved && <Alert severity="success">Odpowiedź zapisana w folderze Wersje robocze.</Alert>}
+          {replyResult && !replyResult.smtpSent && !replyResult.imapSaved && !replyResult.error && (
+            <Alert severity="warning">Brak konfiguracji IMAP/SMTP — skopiuj treść ręcznie.</Alert>
           )}
-          {replyResult && replyResult.error && !replyResult.text && (
-            <Alert severity="error">{replyResult.error}</Alert>
-          )}
-          {replyResult?.smtpSent && (
-            <Alert severity="success">Email wysłany do {replyToEmail}.</Alert>
-          )}
-          {replyResult?.imapSaved && (
-            <Alert severity="success">Odpowiedź zapisana w folderze Wersje robocze.</Alert>
-          )}
-          {replyResult && !replyResult.smtpSent && !replyResult.imapSaved && replyResult.text && (
-            <Alert severity="warning">
-              {replyResult.error
-                ? `Błąd: ${replyResult.error}. Treść poniżej — możesz ją skopiować.`
-                : 'Brak konfiguracji IMAP/SMTP. Treść poniżej — możesz ją skopiować.'}
+
+          {replyText && !replyResult && (
+            <Alert severity="info" sx={{ py: 0.5 }}>
+              Treść wygenerowana — możesz ją edytować przed wysłaniem.
             </Alert>
           )}
-          {replyResult?.text && (
+          {(replyText || replyResult) && (
             <TextField
-              label="Wygenerowana odpowiedź"
+              label="Treść odpowiedzi"
               multiline
-              rows={8}
-              value={replyResult.text}
+              rows={10}
+              value={replyText}
+              onChange={e => setReplyText(e.target.value)}
               fullWidth
-              InputProps={{ readOnly: true }}
+              InputProps={{ readOnly: !!replyResult }}
+              helperText={!replyResult ? `${replyText.length} znaków` : undefined}
             />
           )}
         </DialogContent>
+        <DialogActions sx={{ justifyContent: 'space-between' }}>
+          <Button onClick={() => { setReplyDialog(null); setReplyResult(null); setReplyText(''); }}>Zamknij</Button>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            {!replyResult && (
+              <Button
+                variant={replyText ? 'outlined' : 'contained'}
+                startIcon={replyLoading && !replyText ? <CircularProgress size={18} color="inherit" /> : <Reply />}
+                onClick={handleGenerateReply}
+                disabled={replyLoading || !replyToEmail}
+              >
+                {replyText ? 'Regeneruj' : 'Generuj'}
+              </Button>
+            )}
+            {replyText && !replyResult && (
+              <Button
+                variant="contained"
+                startIcon={replyLoading ? <CircularProgress size={18} color="inherit" /> : undefined}
+                onClick={handleSendReply}
+                disabled={replyLoading || !replyToEmail || !replyText.trim()}
+              >
+                {replyMode === 'smtp' ? 'Wyślij' : 'Zapisz do roboczych'}
+              </Button>
+            )}
+          </Box>
+        </DialogActions>
+      </Dialog>
+
+      {/* Compose Dialog */}
+      <Dialog open={composeOpen} onClose={() => setComposeOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
+        <DialogTitle>Napisz wiadomość do gościa</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
+          {composeResult?.error && <Alert severity="error">{composeResult.error}</Alert>}
+          {composeResult?.sent && <Alert severity="success">Wiadomość wysłana i zapisana w historii korespondencji.</Alert>}
+
+          <TextField
+            label="Do"
+            value={composeForm.to}
+            onChange={e => setComposeForm(f => ({ ...f, to: e.target.value }))}
+            fullWidth
+            disabled={composeResult?.sent}
+          />
+          <TextField
+            label="Temat"
+            value={composeForm.subject}
+            onChange={e => setComposeForm(f => ({ ...f, subject: e.target.value }))}
+            fullWidth
+            disabled={composeResult?.sent}
+          />
+          <TextField
+            label="Treść"
+            multiline
+            rows={10}
+            value={composeForm.body}
+            onChange={e => setComposeForm(f => ({ ...f, body: e.target.value }))}
+            fullWidth
+            disabled={composeResult?.sent}
+            helperText={composeForm.body ? `${composeForm.body.length} znaków` : undefined}
+          />
+
+          {!composeResult?.sent && (
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+              <TextField
+                label="Cel wiadomości (dla AI)"
+                size="small"
+                value={composeAiPurpose}
+                onChange={e => setComposeAiPurpose(e.target.value)}
+                placeholder="np. potwierdzenie rezerwacji, przypomnienie o płatności…"
+                sx={{ flex: 1 }}
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={composeAiLoading ? <CircularProgress size={16} /> : <AutoAwesome />}
+                onClick={handleAiDraft}
+                disabled={composeAiLoading}
+                sx={{ mt: 0.5, flexShrink: 0 }}
+              >
+                Szkic AI
+              </Button>
+            </Box>
+          )}
+        </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setReplyDialog(null); setReplyResult(null); }}>Zamknij</Button>
-          {!replyResult && (
+          <Button onClick={() => setComposeOpen(false)}>
+            {composeResult?.sent ? 'Zamknij' : 'Anuluj'}
+          </Button>
+          {!composeResult?.sent && (
             <Button
               variant="contained"
-              startIcon={replyLoading ? <CircularProgress size={18} /> : <Reply />}
-              onClick={handleGenerateReply}
-              disabled={replyLoading || !replyToEmail}
+              startIcon={composeSending ? <CircularProgress size={18} color="inherit" /> : <Send />}
+              onClick={handleSendMessage}
+              disabled={composeSending || !composeForm.to || !composeForm.subject || !composeForm.body.trim()}
             >
-              {replyMode === 'smtp' ? 'Generuj i wyślij' : 'Generuj i zapisz'}
+              Wyślij
             </Button>
           )}
         </DialogActions>
@@ -503,7 +736,7 @@ export default function ReservationDetailPage() {
           <TextField label="Nazwisko" value={form.guest_last_name || ''}
             onChange={e => setForm({ ...form, guest_last_name: e.target.value })} fullWidth />
           <TextField label="Pokój" select value={form.room || ''}
-            onChange={e => setForm({ ...form, room: e.target.value })} fullWidth>
+            onChange={e => setForm(applyAutoPrice({ room: e.target.value }))} fullWidth>
             {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} os.)</MenuItem>)}
           </TextField>
           <TextField label="Osoby towarzyszące" type="number" value={form.companions ?? 0}
@@ -516,9 +749,9 @@ export default function ReservationDetailPage() {
           <TextField label="Zwierzęta" type="number" value={form.animals ?? 0}
             onChange={e => setForm({ ...form, animals: Math.max(0, +e.target.value) })} />
           <TextField label="Data zameldowania" type="date" InputLabelProps={{ shrink: true }}
-            value={form.check_in || ''} onChange={e => setForm({ ...form, check_in: e.target.value })} />
+            value={form.check_in || ''} onChange={e => setForm(applyAutoPrice({ check_in: e.target.value }))} />
           <TextField label="Data wymeldowania" type="date" InputLabelProps={{ shrink: true }}
-            value={form.check_out || ''} onChange={e => setForm({ ...form, check_out: e.target.value })} />
+            value={form.check_out || ''} onChange={e => setForm(applyAutoPrice({ check_out: e.target.value }))} />
           <FormControlLabel control={<Checkbox checked={form.deposit_paid || false}
             onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label="Zaliczka wpłacona" />
           {form.deposit_paid && (
@@ -529,8 +762,17 @@ export default function ReservationDetailPage() {
                 value={form.deposit_date || ''} onChange={e => setForm({ ...form, deposit_date: e.target.value })} />
             </>
           )}
-          <TextField label="Kwota do zapłaty" type="number" value={form.remaining_amount || '0'}
-            onChange={e => setForm({ ...form, remaining_amount: e.target.value })} />
+          {editUnavailableError && <Alert severity="error">{editUnavailableError}</Alert>}
+          {!editUnavailableError && (
+            <TextField
+              label="Kwota do zapłaty"
+              type="number"
+              value={form.remaining_amount || '0'}
+              onChange={e => { setEditPriceAutoCalc(false); setForm({ ...form, remaining_amount: e.target.value }); }}
+              helperText={editPriceAutoCalc ? 'Obliczono automatycznie na podstawie cennika' : undefined}
+              color={editPriceAutoCalc ? 'success' : undefined}
+            />
+          )}
           <TextField label="Email" value={form.contact_email || ''}
             onChange={e => setForm({ ...form, contact_email: e.target.value })} />
           <TextField label="Telefon" value={form.contact_phone || ''}
@@ -540,7 +782,7 @@ export default function ReservationDetailPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditOpen(false)}>Anuluj</Button>
-          <Button variant="contained" onClick={handleSave}>Zapisz</Button>
+          <Button variant="contained" onClick={handleSave} disabled={!!editUnavailableError}>Zapisz</Button>
         </DialogActions>
       </Dialog>
     </>

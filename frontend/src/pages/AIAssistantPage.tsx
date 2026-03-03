@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import {
   ArrowBack, SmartToy, Add, Save, Delete, UploadFile,
-  Visibility, VisibilityOff, Description, Refresh,
+  Visibility, VisibilityOff, Description, Refresh, Edit,
 } from '@mui/icons-material';
 import api from '../api';
 import { AIAssistant, AIAssistantDocument } from '../types';
@@ -80,6 +80,9 @@ export default function AIAssistantPage() {
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [uploading, setUploading] = useState<number | null>(null);
   const [docToDelete, setDocToDelete] = useState<{ assistantId: number; doc: AIAssistantDocument } | null>(null);
+  const [docToEdit, setDocToEdit] = useState<{ assistantId: number; doc: AIAssistantDocument } | null>(null);
+  const [docEditForm, setDocEditForm] = useState({ name: '', content: '' });
+  const [docEditSaving, setDocEditSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeAssistantId, setActiveAssistantId] = useState<number | null>(null);
 
@@ -223,6 +226,29 @@ export default function AIAssistantPage() {
       load();
     } catch {}
     setDocToDelete(null);
+  };
+
+  const handleOpenDocEdit = (assistantId: number, doc: AIAssistantDocument) => {
+    setDocToEdit({ assistantId, doc });
+    setDocEditForm({ name: doc.name, content: doc.content });
+  };
+
+  const handleSaveDocEdit = async () => {
+    if (!docToEdit) return;
+    setDocEditSaving(true);
+    try {
+      await api.patch(
+        `/hotels/${hotelId}/ai-assistant/${docToEdit.assistantId}/documents/${docToEdit.doc.id}/`,
+        docEditForm,
+      );
+      load();
+      setDocToEdit(null);
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Błąd zapisywania dokumentu.';
+      setAlert({ type: 'error', text: msg });
+    } finally {
+      setDocEditSaving(false);
+    }
   };
 
   if (loading) {
@@ -383,6 +409,39 @@ export default function AIAssistantPage() {
         </DialogActions>
       </Dialog>
 
+      {/* Edit document dialog */}
+      <Dialog open={!!docToEdit} onClose={() => setDocToEdit(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Edytuj dokument</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
+          <TextField
+            label="Nazwa dokumentu"
+            value={docEditForm.name}
+            onChange={e => setDocEditForm(f => ({ ...f, name: e.target.value }))}
+            fullWidth
+          />
+          <TextField
+            label="Treść"
+            multiline
+            rows={16}
+            value={docEditForm.content}
+            onChange={e => setDocEditForm(f => ({ ...f, content: e.target.value }))}
+            fullWidth
+            inputProps={{ style: { fontFamily: 'monospace', fontSize: 13 } }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDocToEdit(null)}>Anuluj</Button>
+          <Button
+            variant="contained"
+            startIcon={docEditSaving ? <CircularProgress size={18} /> : <Save />}
+            onClick={handleSaveDocEdit}
+            disabled={docEditSaving}
+          >
+            Zapisz
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Empty state */}
       {assistants.length === 0 && (
         <Card>
@@ -460,16 +519,29 @@ export default function AIAssistantPage() {
                 Brak dokumentów. Dodaj pliki, które asystent będzie uwzględniał w odpowiedziach.
               </Typography>
             ) : (
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                 {assistant.documents.map(doc => (
-                  <Chip
-                    key={doc.id}
-                    icon={<Description />}
-                    label={doc.name}
-                    onDelete={() => setDocToDelete({ assistantId: assistant.id, doc })}
-                    size="small"
-                    variant="outlined"
-                  />
+                  <Box key={doc.id} sx={{
+                    display: 'flex', alignItems: 'center', gap: 1,
+                    px: 1, py: 0.5, borderRadius: 1,
+                    border: '1px solid', borderColor: 'divider',
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}>
+                    <Description fontSize="small" color="action" />
+                    <Typography variant="body2" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {doc.name}
+                    </Typography>
+                    <Tooltip title="Edytuj treść">
+                      <IconButton size="small" onClick={() => handleOpenDocEdit(assistant.id, doc)}>
+                        <Edit fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Usuń dokument">
+                      <IconButton size="small" color="error" onClick={() => setDocToDelete({ assistantId: assistant.id, doc })}>
+                        <Delete fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
                 ))}
               </Box>
             )}

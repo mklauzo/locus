@@ -31,6 +31,8 @@ urlpatterns = [
     path('hotels/<int:hotel_pk>/reservations/<int:pk>/settle/', views.ReservationViewSet.as_view({
         'post': 'settle',
     })),
+    path('hotels/<int:hotel_pk>/reservations/<int:pk>/send-message/', views.send_message, name='send_message'),
+    path('hotels/<int:hotel_pk>/reservations/<int:pk>/generate-message/', views.generate_outbound_message, name='generate_outbound_message'),
     path('hotels/<int:hotel_pk>/reservations/<int:reservation_pk>/correspondence/<int:pk>/',
          views.delete_correspondence, name='delete_correspondence'),
     path('hotels/<int:hotel_pk>/reservations/<int:reservation_pk>/correspondence/<int:pk>/reply/',
@@ -47,7 +49,7 @@ urlpatterns = [
     path('hotels/<int:hotel_pk>/ai-assistant/<int:assistant_pk>/documents/',
          views.upload_ai_document, name='upload_ai_document'),
     path('hotels/<int:hotel_pk>/ai-assistant/<int:assistant_pk>/documents/<int:pk>/',
-         views.delete_ai_document, name='delete_ai_document'),
+         views.ai_document_detail, name='ai_document_detail'),
     path('fetch-llm-models/', views.fetch_llm_models, name='fetch_llm_models'),
     path('test-smtp/', views.test_smtp_standalone, name='test_smtp'),
     path('test-imap/', views.test_imap_standalone, name='test_imap'),

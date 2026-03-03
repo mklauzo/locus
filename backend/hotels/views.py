@@ -530,14 +530,24 @@ def upload_ai_document(request, hotel_pk, assistant_pk):
     return Response(AIAssistantDocumentSerializer(doc).data, status=status.HTTP_201_CREATED)
 
 
-@api_view(['DELETE'])
-def delete_ai_document(request, hotel_pk, assistant_pk, pk):
+@api_view(['DELETE', 'PATCH'])
+def ai_document_detail(request, hotel_pk, assistant_pk, pk):
     try:
         doc = AIAssistantDocument.objects.get(pk=pk, assistant_id=assistant_pk, assistant__hotel_id=hotel_pk)
     except AIAssistantDocument.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
-    doc.delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
+
+    if request.method == 'DELETE':
+        doc.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # PATCH — update name and/or content
+    if 'name' in request.data:
+        doc.name = request.data['name'].strip() or doc.name
+    if 'content' in request.data:
+        doc.content = request.data['content']
+    doc.save()
+    return Response(AIAssistantDocumentSerializer(doc).data)
 
 
 @api_view(['POST'])
@@ -569,6 +579,9 @@ def generate_email_reply(request, hotel_pk, reservation_pk, pk):
 
     to_email = request.data.get('to_email', '') or correspondence.sender_email or reservation.contact_email or ''
     send_via_smtp = request.data.get('send_via_smtp', False)
+    generate_only = request.data.get('generate_only', False)
+    # If caller provides pre-edited text, skip LLM generation
+    provided_reply = request.data.get('reply_text', '').strip()
 
     # Build context from documents
     docs_context = ''
@@ -608,15 +621,21 @@ def generate_email_reply(request, hotel_pk, reservation_pk, pk):
         f'Napisz odpowiedź na powyższy email w imieniu hotelu.'
     )
 
-    try:
-        reply_text = _call_llm_api(
-            assistant.llm_model, assistant.llm_api_key, system, user_message,
-            ollama_url=assistant.ollama_url or 'http://ollama:11434',
-        )
-    except Exception as e:
-        import traceback
-        print(f'[AI REPLY ERROR] model={assistant.llm_model} url={assistant.ollama_url}: {e}\n{traceback.format_exc()}', flush=True)
-        return Response({'detail': f'Błąd generowania odpowiedzi: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+    if provided_reply:
+        reply_text = provided_reply
+    else:
+        try:
+            reply_text = _call_llm_api(
+                assistant.llm_model, assistant.llm_api_key, system, user_message,
+                ollama_url=assistant.ollama_url or 'http://ollama:11434',
+            )
+        except Exception as e:
+            import traceback
+            print(f'[AI REPLY ERROR] model={assistant.llm_model} url={assistant.ollama_url}: {e}\n{traceback.format_exc()}', flush=True)
+            return Response({'detail': f'Błąd generowania odpowiedzi: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if generate_only:
+        return Response({'reply_text': reply_text})
 
     # Send via SMTP or save to IMAP Drafts
     if send_via_smtp:
@@ -636,6 +655,130 @@ def generate_email_reply(request, hotel_pk, reservation_pk, pk):
             except Exception as e:
                 return Response({'reply_text': reply_text, 'imap_saved': False, 'imap_error': str(e)})
         return Response({'reply_text': reply_text, 'imap_saved': False})
+
+
+# --- Compose & send new message ---
+
+@api_view(['POST'])
+def send_message(request, hotel_pk, pk):
+    """Compose and send a new outbound email to the guest via hotel SMTP."""
+    import smtplib
+    import email as email_lib
+    import uuid
+    from email.mime.text import MIMEText
+    from datetime import datetime
+
+    try:
+        reservation = Reservation.objects.select_related('hotel').get(pk=pk, hotel_id=hotel_pk)
+    except Reservation.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    hotel = reservation.hotel
+    to_email = request.data.get('to_email', '').strip()
+    subject = request.data.get('subject', '').strip()
+    body = request.data.get('body', '').strip()
+
+    if not to_email or not subject or not body:
+        return Response({'detail': 'Wypełnij adres e-mail, temat i treść.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not hotel.smtp_host or not hotel.smtp_login or not hotel.smtp_password:
+        return Response({'detail': 'Hotel nie ma skonfigurowanego SMTP — skonfiguruj go w ustawieniach hotelu.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['From'] = hotel.email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg['Date'] = email_lib.utils.formatdate(localtime=True)
+        msg['Message-ID'] = f'<sent-{uuid.uuid4()}@locus>'
+
+        if hotel.smtp_ssl:
+            server = smtplib.SMTP_SSL(hotel.smtp_host, hotel.smtp_port, timeout=30)
+        else:
+            server = smtplib.SMTP(hotel.smtp_host, hotel.smtp_port, timeout=30)
+            server.starttls()
+
+        server.login(hotel.smtp_login, hotel.smtp_password)
+        server.sendmail(hotel.email, [to_email], msg.as_string())
+        server.quit()
+
+        # Save to correspondence history
+        MailCorrespondence.objects.create(
+            reservation=reservation,
+            date=datetime.now(),
+            subject=subject,
+            body=body,
+            message_id=msg['Message-ID'],
+            sender_email=hotel.email,
+        )
+
+        return Response({'status': 'sent'})
+
+    except smtplib.SMTPAuthenticationError as e:
+        return Response({'detail': f'Błąd logowania SMTP: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+    except Exception as e:
+        return Response({'detail': f'Błąd wysyłania: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@api_view(['POST'])
+def generate_outbound_message(request, hotel_pk, pk):
+    """Generate an AI draft for a new outbound message to the guest."""
+    try:
+        reservation = Reservation.objects.select_related('hotel', 'room').get(pk=pk, hotel_id=hotel_pk)
+    except Reservation.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    hotel = reservation.hotel
+    assistant = AIAssistant.objects.prefetch_related('documents').filter(
+        hotel=hotel, is_active=True
+    ).first()
+
+    if not assistant:
+        return Response({'detail': 'Brak aktywnego asystenta AI dla tego hotelu.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not assistant.llm_api_key and not assistant.llm_model.startswith('ollama:'):
+        return Response({'detail': 'Asystent AI nie ma skonfigurowanego klucza API.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    purpose = request.data.get('purpose', '').strip()
+
+    docs_context = ''
+    for doc in assistant.documents.all():
+        docs_context += f'\n\n--- Dokument: {doc.name} ---\n{doc.content[:2000]}'
+
+    system = (assistant.system_prompt or
+              'Jesteś pomocnym asystentem hotelowym. Piszesz emaile do gości w imieniu hotelu. '
+              'Bądź uprzejmy, profesjonalny i pomocny.')
+    if docs_context:
+        system += f'\n\nDodatkowe informacje o hotelu:\n{docs_context}'
+
+    deposit_status = (
+        f'wpłacona ({reservation.deposit_amount} zł)'
+        if reservation.deposit_paid else 'nie wpłacona'
+    )
+    reservation_info = (
+        f'Hotel: {hotel.name}\n'
+        f'Gość: {reservation.guest_name}\n'
+        f'Pokój: {reservation.room.number}\n'
+        f'Przyjazd: {reservation.check_in}\n'
+        f'Wyjazd: {reservation.check_out}\n'
+        f'Liczba dni: {reservation.days_count}\n'
+        f'Zaliczka: {deposit_status}\n'
+        f'Kwota do zapłaty: {reservation.remaining_amount} zł\n'
+    )
+
+    user_message = (
+        f'Napisz nową wiadomość email do gościa. Napisz tylko treść emaila, bez tematu.\n\n'
+        f'Informacje o rezerwacji:\n{reservation_info}\n'
+        + (f'Cel wiadomości: {purpose}\n' if purpose else 'Cel: ogólna informacja lub powitanie.\n')
+    )
+
+    try:
+        draft = _call_llm_api(
+            assistant.llm_model, assistant.llm_api_key, system, user_message,
+            ollama_url=assistant.ollama_url or 'http://ollama:11434',
+        )
+        return Response({'draft': draft})
+    except Exception as e:
+        return Response({'detail': f'Błąd generowania: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 # --- Correspondence ---
