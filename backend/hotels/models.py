@@ -65,6 +65,17 @@ class Room(models.Model):
         unique_together = ['hotel', 'number']
 
 
+class RoomPricing(models.Model):
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='pricing')
+    month = models.IntegerField()  # 1–12
+    price_per_night = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = 'room_pricing'
+        unique_together = ['room', 'month']
+        ordering = ['month']
+
+
 class Reservation(models.Model):
     hotel = models.ForeignKey(Hotel, on_delete=models.CASCADE, related_name='reservations')
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='reservations')

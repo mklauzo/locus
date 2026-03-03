@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Hotel, Room, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
+from .models import Hotel, Room, RoomPricing, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
 
 User = get_user_model()
 
@@ -38,11 +38,39 @@ class UserMeSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role']
 
 
+class RoomPricingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RoomPricing
+        fields = ['month', 'price_per_night']
+
+
 class RoomSerializer(serializers.ModelSerializer):
+    pricing = RoomPricingSerializer(many=True, required=False)
+
     class Meta:
         model = Room
-        fields = ['id', 'hotel', 'number', 'capacity', 'is_deleted', 'created_at']
+        fields = ['id', 'hotel', 'number', 'capacity', 'pricing', 'is_deleted', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+    def create(self, validated_data):
+        pricing_data = validated_data.pop('pricing', [])
+        room = Room.objects.create(**validated_data)
+        for p in pricing_data:
+            if float(p['price_per_night']) > 0:
+                RoomPricing.objects.create(room=room, **p)
+        return room
+
+    def update(self, instance, validated_data):
+        pricing_data = validated_data.pop('pricing', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if pricing_data is not None:
+            instance.pricing.all().delete()
+            for p in pricing_data:
+                if float(p['price_per_night']) > 0:
+                    RoomPricing.objects.create(room=instance, **p)
+        return instance
 
 
 class RoomSimpleSerializer(serializers.ModelSerializer):
@@ -149,6 +177,24 @@ class ReservationSerializer(serializers.ModelSerializer):
                 overlapping = overlapping.exclude(pk=self.instance.pk)
             if overlapping.exists():
                 raise serializers.ValidationError("Pokój jest zajęty w wybranym terminie.")
+
+        # If room has any pricing configured, reject dates with missing monthly price
+        if room and check_in and check_out:
+            from datetime import timedelta
+            priced_months = set(
+                RoomPricing.objects.filter(room=room, price_per_night__gt=0).values_list('month', flat=True)
+            )
+            if priced_months:
+                pl_months = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
+                             'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
+                current = check_in
+                while current < check_out:
+                    if current.month not in priced_months:
+                        raise serializers.ValidationError(
+                            f"Pokój niedostępny w {pl_months[current.month]} — brak cennika dla tego miesiąca."
+                        )
+                    current += timedelta(days=1)
+
         return data
 
 

@@ -10,7 +10,38 @@ import {
 import { alpha } from '@mui/material/styles';
 import { Add, Visibility, Delete, ArrowBack, MailOutline } from '@mui/icons-material';
 import api from '../api';
-import { Reservation, RoomSimple } from '../types';
+import { Reservation, Room } from '../types';
+
+const PL_MONTHS = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
+  'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
+
+// Returns: number = calculated price, string = unavailability error, null = no pricing configured (no restriction)
+function calcPrice(rooms: Room[], roomId: string, checkIn: string, checkOut: string): number | string | null {
+  const room = rooms.find(r => r.id === Number(roomId));
+  if (!room || !room.pricing || room.pricing.length === 0) return null;
+  if (!checkIn || !checkOut) return null;
+
+  const pricingMap: Record<number, number> = {};
+  room.pricing.forEach(p => {
+    if (Number(p.price_per_night) > 0) pricingMap[p.month] = Number(p.price_per_night);
+  });
+
+  const start = new Date(checkIn);
+  const end = new Date(checkOut);
+  if (end <= start) return null;
+
+  let total = 0;
+  const cur = new Date(start);
+  while (cur < end) {
+    const month = cur.getMonth() + 1;
+    if (!(month in pricingMap)) {
+      return `Pokój niedostępny w ${PL_MONTHS[month]} — brak cennika dla tego miesiąca.`;
+    }
+    total += pricingMap[month];
+    cur.setDate(cur.getDate() + 1);
+  }
+  return total;
+}
 
 const emptyForm = {
   room: '', guest_first_name: '', guest_last_name: '', companions: '' as any, animals: '' as any,
@@ -24,11 +55,13 @@ export default function ReservationsPage() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [rooms, setRooms] = useState<RoomSimple[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [editId, setEditId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [priceAutoCalc, setPriceAutoCalc] = useState(false);
+  const [unavailableError, setUnavailableError] = useState('');
   const [filterGuest, setFilterGuest] = useState('');
   const [filterRoom, setFilterRoom] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -54,6 +87,23 @@ export default function ReservationsPage() {
     const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
   }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo]);
+
+  const applyAutoPrice = (patch: Partial<typeof emptyForm>, currentForm = form) => {
+    const merged = { ...currentForm, ...patch };
+    const price = calcPrice(rooms, merged.room, merged.check_in, merged.check_out);
+    if (typeof price === 'string') {
+      setUnavailableError(price);
+      setPriceAutoCalc(false);
+      return { ...merged, remaining_amount: '' };
+    }
+    setUnavailableError('');
+    if (typeof price === 'number') {
+      setPriceAutoCalc(true);
+      return { ...merged, remaining_amount: String(price) };
+    }
+    setPriceAutoCalc(false);
+    return merged;
+  };
 
   const handleSave = async () => {
     setError('');
@@ -104,7 +154,7 @@ export default function ReservationsPage() {
       </Button>
       <Typography variant="h5" sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         Rezerwacje
-        <Button variant="contained" startIcon={<Add />} onClick={() => { setForm(emptyForm); setEditId(null); setOpen(true); }}>
+        <Button variant="contained" startIcon={<Add />} onClick={() => { setForm(emptyForm); setEditId(null); setPriceAutoCalc(false); setUnavailableError(''); setOpen(true); }}>
           Nowa rezerwacja
         </Button>
       </Typography>
@@ -207,7 +257,7 @@ export default function ReservationsPage() {
           <TextField label="Nazwisko" value={form.guest_last_name}
             onChange={e => setForm({ ...form, guest_last_name: e.target.value })} fullWidth />
           <TextField label="Pokój" select value={form.room}
-            onChange={e => setForm({ ...form, room: e.target.value })} fullWidth>
+            onChange={e => setForm(applyAutoPrice({ room: e.target.value }))} fullWidth>
             {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} os.)</MenuItem>)}
           </TextField>
           <TextField label="Osoby towarzyszące" type="number" value={form.companions}
@@ -220,9 +270,9 @@ export default function ReservationsPage() {
           <TextField label="Zwierzęta" type="number" value={form.animals}
             onChange={e => setForm({ ...form, animals: Math.max(0, +e.target.value) })} />
           <TextField label="Data zameldowania" type="date" InputLabelProps={{ shrink: true }}
-            value={form.check_in} onChange={e => setForm({ ...form, check_in: e.target.value })} />
+            value={form.check_in} onChange={e => setForm(applyAutoPrice({ check_in: e.target.value }))} />
           <TextField label="Data wymeldowania" type="date" InputLabelProps={{ shrink: true }}
-            value={form.check_out} onChange={e => setForm({ ...form, check_out: e.target.value })} />
+            value={form.check_out} onChange={e => setForm(applyAutoPrice({ check_out: e.target.value }))} />
           <FormControlLabel control={<Checkbox checked={form.deposit_paid}
             onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label="Zaliczka wpłacona" />
           {form.deposit_paid && (
@@ -233,8 +283,17 @@ export default function ReservationsPage() {
                 value={form.deposit_date} onChange={e => setForm({ ...form, deposit_date: e.target.value })} />
             </>
           )}
-          <TextField label="Kwota do zapłaty" type="number" value={form.remaining_amount}
-            onChange={e => setForm({ ...form, remaining_amount: e.target.value })} />
+          {unavailableError && <Alert severity="error">{unavailableError}</Alert>}
+          {!unavailableError && (
+            <TextField
+              label="Kwota do zapłaty"
+              type="number"
+              value={form.remaining_amount}
+              onChange={e => { setPriceAutoCalc(false); setForm({ ...form, remaining_amount: e.target.value }); }}
+              helperText={priceAutoCalc ? 'Obliczono automatycznie na podstawie cennika' : undefined}
+              color={priceAutoCalc ? 'success' : undefined}
+            />
+          )}
           <TextField label="Email kontaktowy" value={form.contact_email}
             onChange={e => setForm({ ...form, contact_email: e.target.value })} />
           <TextField label="Telefon" value={form.contact_phone}
@@ -244,7 +303,7 @@ export default function ReservationsPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Anuluj</Button>
-          <Button variant="contained" onClick={handleSave}>Zapisz</Button>
+          <Button variant="contained" onClick={handleSave} disabled={!!unavailableError}>Zapisz</Button>
         </DialogActions>
       </Dialog>
     </>

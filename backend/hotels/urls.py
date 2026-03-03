@@ -35,6 +35,8 @@ urlpatterns = [
          views.delete_correspondence, name='delete_correspondence'),
     path('hotels/<int:hotel_pk>/reservations/<int:reservation_pk>/correspondence/<int:pk>/reply/',
          views.generate_email_reply, name='generate_email_reply'),
+    path('hotels/<int:hotel_pk>/rooms/<int:room_pk>/calculate-price/', views.calculate_room_price, name='calculate_room_price'),
+    path('hotels/<int:hotel_pk>/search-inquiries/', views.search_inquiries, name='search_inquiries'),
     path('hotels/<int:hotel_pk>/calendar/', views.calendar_view, name='calendar'),
     path('hotels/<int:hotel_pk>/ai-assistant/', views.AIAssistantViewSet.as_view({
         'get': 'list', 'post': 'create',

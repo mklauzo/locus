@@ -34,11 +34,17 @@ export interface RoomSimple {
   capacity: number;
 }
 
+export interface RoomPricing {
+  month: number;
+  price_per_night: number;
+}
+
 export interface Room {
   id: number;
   hotel: number;
   number: string;
   capacity: number;
+  pricing: RoomPricing[];
   is_deleted: boolean;
   created_at: string;
 }

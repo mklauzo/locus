@@ -8,13 +8,16 @@ from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models import Q
-from .models import Hotel, Room, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
+from .models import Hotel, Room, RoomPricing, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
 from .serializers import (
     UserSerializer, UserMeSerializer, HotelSerializer, RoomSerializer,
     ReservationSerializer, ReservationListSerializer, CalendarSerializer,
     MailCorrespondenceSerializer, AIAssistantSerializer, AIAssistantDocumentSerializer,
 )
-from .tasks import search_mail_for_reservation, send_deposit_confirmation, _call_llm_api
+from .tasks import (
+    search_mail_for_reservation, send_deposit_confirmation, _call_llm_api,
+    decode_mime_header, extract_email_from_header, _get_message_body,
+)
 
 User = get_user_model()
 
@@ -649,6 +652,146 @@ def delete_correspondence(request, hotel_pk, reservation_pk, pk):
         return Response(status=status.HTTP_404_NOT_FOUND)
     mail.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --- Room price calculation ---
+
+@api_view(['GET'])
+def calculate_room_price(request, hotel_pk, room_pk):
+    """Return total price for a room stay based on monthly pricing."""
+    from datetime import date as date_type, timedelta
+    from decimal import Decimal
+
+    check_in_str = request.query_params.get('check_in', '')
+    check_out_str = request.query_params.get('check_out', '')
+    if not check_in_str or not check_out_str:
+        return Response({'detail': 'Wymagane parametry check_in i check_out.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        check_in = date_type.fromisoformat(check_in_str)
+        check_out = date_type.fromisoformat(check_out_str)
+    except ValueError:
+        return Response({'detail': 'Nieprawidłowy format daty.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if check_out <= check_in:
+        return Response({'total': '0.00', 'breakdown': []})
+
+    pricing = {p.month: p.price_per_night for p in RoomPricing.objects.filter(room_id=room_pk)}
+    if not pricing:
+        return Response({'total': '0.00', 'breakdown': []})
+
+    # Sum per month
+    monthly = {}
+    current = check_in
+    while current < check_out:
+        m = current.month
+        price = pricing.get(m, Decimal('0'))
+        monthly[m] = monthly.get(m, Decimal('0')) + price
+        current += timedelta(days=1)
+
+    MONTH_NAMES = ['', 'Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru']
+    breakdown = [
+        {'month': m, 'month_name': MONTH_NAMES[m], 'amount': str(monthly[m])}
+        for m in sorted(monthly)
+    ]
+    total = sum(monthly.values())
+    return Response({'total': str(total), 'breakdown': breakdown})
+
+
+# --- New inquiries search ---
+
+@api_view(['POST'])
+def search_inquiries(request, hotel_pk):
+    """Search hotel IMAP inbox for emails from senders not linked to any existing reservation."""
+    import email as email_lib
+    from datetime import datetime, timedelta
+
+    try:
+        if request.user.is_admin:
+            hotel = Hotel.objects.get(pk=hotel_pk, is_deleted=False)
+        else:
+            hotel = Hotel.objects.get(pk=hotel_pk, users=request.user, is_deleted=False)
+    except Hotel.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if not hotel.imap_host or not hotel.imap_login or not hotel.imap_password:
+        return Response({'detail': 'Brak konfiguracji IMAP dla tego hotelu.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Build set of known sender emails from existing reservations
+    known_emails = set()
+    for addr in Reservation.objects.filter(
+        hotel=hotel, is_deleted=False,
+    ).exclude(contact_email='').values_list('contact_email', flat=True):
+        known_emails.add(addr.lower())
+
+    # Also ignore the hotel's own addresses (sent items landing in inbox)
+    for addr in [hotel.email, hotel.imap_login]:
+        if addr:
+            known_emails.add(addr.lower())
+
+    days_back = int(request.data.get('days_back', 30))
+
+    try:
+        if hotel.imap_ssl:
+            mail = imaplib.IMAP4_SSL(hotel.imap_host, hotel.imap_port)
+        else:
+            mail = imaplib.IMAP4(hotel.imap_host, hotel.imap_port)
+
+        mail.login(hotel.imap_login, hotel.imap_password)
+        mail.select('INBOX', readonly=True)
+
+        since_date = (datetime.now() - timedelta(days=days_back)).strftime('%d-%b-%Y')
+        _, message_ids = mail.search(None, f'SINCE {since_date}')
+
+        inquiries = []
+
+        if message_ids[0]:
+            for msg_id in message_ids[0].split():
+                try:
+                    _, header_data = mail.fetch(msg_id, '(BODY[HEADER.FIELDS (DATE FROM SUBJECT MESSAGE-ID)])')
+                    header_msg = email_lib.message_from_bytes(header_data[0][1])
+
+                    from_header = header_msg.get('From', '')
+                    sender_email = extract_email_from_header(from_header)
+
+                    if not sender_email or sender_email.lower() in known_emails:
+                        continue
+
+                    message_id_header = header_msg.get('Message-ID', f'<{msg_id.decode()}@local>')
+                    subject = decode_mime_header(header_msg.get('Subject', ''))
+                    date_str = header_msg.get('Date', '')
+
+                    try:
+                        msg_date = email_lib.utils.parsedate_to_datetime(date_str)
+                    except Exception:
+                        msg_date = datetime.now()
+
+                    # Fetch full message for body preview
+                    _, msg_data = mail.fetch(msg_id, '(RFC822)')
+                    full_msg = email_lib.message_from_bytes(msg_data[0][1])
+                    body = _get_message_body(full_msg)
+
+                    from_name = re.sub(r'<.*?>', '', decode_mime_header(from_header)).strip().strip('"').strip("'")
+
+                    inquiries.append({
+                        'message_id': message_id_header,
+                        'from_name': from_name or sender_email,
+                        'from_email': sender_email,
+                        'subject': subject,
+                        'date': msg_date.isoformat() if hasattr(msg_date, 'isoformat') else str(msg_date),
+                        'body_preview': body[:400].strip(),
+                    })
+                except Exception:
+                    pass
+
+        mail.logout()
+        inquiries.sort(key=lambda x: x['date'], reverse=True)
+        return Response(inquiries)
+
+    except imaplib.IMAP4.error as e:
+        return Response({'detail': f'Błąd IMAP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({'detail': f'Błąd połączenia: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # --- Calendar ---

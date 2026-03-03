@@ -176,3 +176,24 @@ u.save()
 **Opcja 3 — panel admina:**
 
 Wejdź na `http://localhost:8088/admin/` → **Users** → **admin** → zmień hasło.
+
+### Błąd migracji: „Conflicting migrations detected"
+
+Pojawia się gdy nowa migracja z repozytorium ma ten sam numer co migracja już istniejąca w kontenerze (np. dwie migracje `0004_*`).
+
+**Rozwiązanie:** usuń duplikat i zrestartuj backend:
+
+```bash
+# Sprawdź które migracje kolidują (np. 0004_room_pricing i 0004_ai_assistant)
+ls /root/docker/locus/backend/hotels/migrations/
+
+# Usuń plik który NIE jest w repozytorium (pozostaw ten z repo)
+rm /root/docker/locus/backend/hotels/migrations/0004_room_pricing.py   # przykład
+
+docker compose restart backend
+```
+
+> Jeśli nie wiadomo który plik usunąć, sprawdź zawartość repozytorium lub uruchom:
+> ```bash
+> docker compose exec backend python manage.py showmigrations hotels
+> ```

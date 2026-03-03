@@ -2,12 +2,22 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Typography, Card, CardContent, Grid, Button, Box, Chip, Alert, CircularProgress,
+  Dialog, DialogTitle, DialogContent, DialogActions, List, ListItem, ListItemText,
 } from '@mui/material';
 import {
-  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy,
+  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, Inbox, Search,
 } from '@mui/icons-material';
 import api from '../api';
 import { Hotel } from '../types';
+
+interface Inquiry {
+  message_id: string;
+  from_name: string;
+  from_email: string;
+  subject: string;
+  date: string;
+  body_preview: string;
+}
 
 export default function HotelDetailPage() {
   const { id } = useParams();
@@ -17,6 +27,10 @@ export default function HotelDetailPage() {
   const [imapResult, setImapResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpResult, setSmtpResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [inquiriesOpen, setInquiriesOpen] = useState(false);
+  const [inquiries, setInquiries] = useState<Inquiry[] | null>(null);
+  const [inquiriesLoading, setInquiriesLoading] = useState(false);
+  const [inquiriesError, setInquiriesError] = useState<string | null>(null);
 
   useEffect(() => {
     api.get(`/hotels/${id}/`).then(r => setHotel(r.data));
@@ -47,6 +61,19 @@ export default function HotelDetailPage() {
       setSmtpResult({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia' });
     } finally {
       setSmtpTesting(false);
+    }
+  };
+
+  const handleSearchInquiries = async () => {
+    setInquiriesError(null);
+    setInquiriesLoading(true);
+    try {
+      const res = await api.post(`/hotels/${id}/search-inquiries/`, {});
+      setInquiries(res.data);
+    } catch (err: any) {
+      setInquiriesError(err.response?.data?.detail || 'Błąd wyszukiwania zapytań.');
+    } finally {
+      setInquiriesLoading(false);
     }
   };
 
@@ -156,7 +183,99 @@ export default function HotelDetailPage() {
             </CardContent>
           </Card>
         </Grid>
+        {hotel.imap_host && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card
+              sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 }, position: 'relative' }}
+              onClick={() => setInquiriesOpen(true)}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                <Inbox sx={{ fontSize: 48, color: 'warning.main', mb: 1 }} />
+                <Typography variant="h6">Nowe zapytania</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Sprawdź nieznanych nadawców
+                </Typography>
+                {inquiries !== null && inquiries.length > 0 && (
+                  <Chip
+                    label={inquiries.length}
+                    color="error"
+                    size="small"
+                    sx={{ position: 'absolute', top: 8, right: 8 }}
+                  />
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
       </Grid>
+
+      <Dialog open={inquiriesOpen} onClose={() => setInquiriesOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+            <span>Nowe zapytania z e-mail</span>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={inquiriesLoading ? <CircularProgress size={16} color="inherit" /> : <Search />}
+              onClick={handleSearchInquiries}
+              disabled={inquiriesLoading}
+            >
+              {inquiriesLoading ? 'Wyszukiwanie...' : 'Wyszukaj w skrzynce'}
+            </Button>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          {inquiriesError && <Alert severity="error" sx={{ mb: 2 }}>{inquiriesError}</Alert>}
+          {inquiries === null && !inquiriesLoading && (
+            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+              Kliknij „Wyszukaj w skrzynce" aby znaleźć nowe zapytania od nieznanych nadawców (ostatnie 30 dni).
+            </Typography>
+          )}
+          {inquiries !== null && inquiries.length === 0 && (
+            <Alert severity="info">Brak nowych zapytań od nieznanych nadawców w ciągu ostatnich 30 dni.</Alert>
+          )}
+          {inquiries && inquiries.length > 0 && (
+            <List disablePadding>
+              {inquiries.map((inq) => (
+                <ListItem key={inq.message_id} divider alignItems="flex-start" sx={{ gap: 1 }}>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 1 }}>
+                        <Typography variant="subtitle2" noWrap>{inq.from_name}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                          {new Date(inq.date).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })}
+                        </Typography>
+                      </Box>
+                    }
+                    secondary={
+                      <>
+                        <Typography variant="body2" color="text.secondary">{inq.from_email}</Typography>
+                        <Typography variant="body2" fontWeight={500}>{inq.subject}</Typography>
+                        {inq.body_preview && (
+                          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>
+                            {inq.body_preview}
+                          </Typography>
+                        )}
+                      </>
+                    }
+                  />
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    sx={{ flexShrink: 0, alignSelf: 'flex-start', mt: 0.5 }}
+                    onClick={() => navigator.clipboard.writeText(inq.from_email)}
+                  >
+                    Kopiuj e-mail
+                  </Button>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setInquiriesOpen(false)}>Zamknij</Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
