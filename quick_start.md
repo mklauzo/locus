@@ -27,9 +27,12 @@ Otwórz `.env` i ustaw co najmniej:
 | `ADMIN_USERNAME` | Login pierwszego administratora | `admin` |
 | `ADMIN_PASSWORD` | Hasło administratora | `zmień_to_hasło` |
 | `POSTGRES_PASSWORD` | Hasło bazy danych | `mocne_haslo_db` |
+| `DJANGO_ALLOWED_HOSTS` | Dozwolone hosty/IP (domyślnie `*`) | `ip-serwera,moja-domena.pl` |
 | `OPENWEATHER_API_KEY` | Klucz API do widgetu pogody (opcjonalny) | — |
 
 Pozostałe zmienne mają sensowne wartości domyślne i nie wymagają zmian przy instalacji lokalnej.
+
+> **Instalacja na serwerze:** ustaw `DJANGO_ALLOWED_HOSTS` na publiczny adres IP lub domenę serwera, np. `DJANGO_ALLOWED_HOSTS=46.242.128.121`. Możesz podać wiele wartości oddzielonych przecinkiem. Domyślna wartość `*` zezwala na wszystkie hosty.
 
 ## 3. Uruchom aplikację
 
@@ -176,6 +179,46 @@ u.save()
 **Opcja 3 — panel admina:**
 
 Wejdź na `http://localhost:8088/admin/` → **Users** → **admin** → zmień hasło.
+
+### Błąd logowania: „Invalid HTTP_HOST header" / Bad Request 400
+
+Backend zwraca błąd 400 przy próbie logowania, a w logach widać:
+```
+Invalid HTTP_HOST header: '1.2.3.4'. You may need to add '1.2.3.4' to ALLOWED_HOSTS.
+```
+
+Adres IP lub domena serwera nie jest na liście dozwolonych hostów Django. Otwórz `.env` i dodaj:
+
+```
+DJANGO_ALLOWED_HOSTS=1.2.3.4,mójdomain.pl
+```
+
+Następnie pełny restart (zmiana `.env` wymaga `down` + `up`):
+```bash
+docker compose down && docker compose up -d
+```
+
+---
+
+### Błąd migracji: „NodeNotFoundError — dependencies reference nonexistent parent node"
+
+```
+NodeNotFoundError: Migration hotels.0009_room_pricing dependencies reference nonexistent parent node ('hotels', '0008_reservation_has_new_mail')
+```
+
+Brakuje pliku migracji w katalogu `backend/hotels/migrations/`. Upewnij się, że klonujesz repozytorium w całości i nie brakuje żadnego pliku migracji. Sprawdź:
+
+```bash
+ls backend/hotels/migrations/
+```
+
+Powinny być wszystkie pliki od `0001_initial.py` do ostatniego kolejno po sobie. Jeśli brakuje któregoś — pobierz go z repozytorium (`git pull`) i zrestartuj backend:
+
+```bash
+docker compose restart backend
+```
+
+---
 
 ### Błąd migracji: „Conflicting migrations detected"
 
