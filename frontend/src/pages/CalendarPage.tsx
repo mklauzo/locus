@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Typography, Button, Box, Paper, IconButton, Tooltip,
   ToggleButtonGroup, ToggleButton,
@@ -32,11 +32,15 @@ type ViewMode = 'gantt' | 'matrix';
 export default function CalendarPage() {
   const { hotelId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [viewMode, setViewMode] = useState<ViewMode>(
     () => (localStorage.getItem('calendarViewMode') as ViewMode) || 'gantt',
   );
-  const [month, setMonth] = useState(dayjs().startOf('month'));
+  const [month, setMonth] = useState(() => {
+    const s = (location.state as any);
+    return s?.initialMonth ? dayjs(s.initialMonth).startOf('month') : dayjs().startOf('month');
+  });
   const [rooms, setRooms] = useState<RoomSimple[]>([]);
   const [reservations, setReservations] = useState<CalendarEntry[]>([]);
 

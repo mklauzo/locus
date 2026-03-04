@@ -6,7 +6,7 @@ import {
   TextField, Divider,
 } from '@mui/material';
 import {
-  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search, PendingActions, Reply, AutoAwesome,
+  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search, PendingActions, Reply, AutoAwesome, Inventory,
 } from '@mui/icons-material';
 import api from '../api';
 import { Hotel, Inquiry } from '../types';
@@ -235,7 +235,7 @@ export default function HotelDetailPage() {
         )}
         <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
-                onClick={() => navigate(`/hotels/${id}/reservations`, { state: { preliminary: true } })}>
+                onClick={() => navigate(`/hotels/${id}/reservations?filter=preliminary`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <PendingActions sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
               <Typography variant="h6">Rezerwacje wstępne</Typography>
@@ -247,7 +247,7 @@ export default function HotelDetailPage() {
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
-                onClick={() => navigate(`/hotels/${id}/reservations`, { state: { confirmed: true } })}>
+                onClick={() => navigate(`/hotels/${id}/reservations?filter=confirmed`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <EventNote sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
               <Typography variant="h6">Rezerwacje potwierdzone</Typography>
@@ -289,6 +289,18 @@ export default function HotelDetailPage() {
               <Typography variant="h6">Pokoje</Typography>
               <Typography variant="body2" color="text.secondary">
                 Zarządzaj pokojami ({hotel.rooms.length})
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
+                onClick={() => navigate(`/hotels/${id}/archive`)}>
+            <CardContent sx={{ textAlign: 'center', py: 4 }}>
+              <Inventory sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+              <Typography variant="h6">Historia</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Archiwum rozliczonych rezerwacji
               </Typography>
             </CardContent>
           </Card>

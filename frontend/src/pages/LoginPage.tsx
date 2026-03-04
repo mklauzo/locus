@@ -23,7 +23,7 @@ export default function LoginPage() {
       <Card sx={{ maxWidth: 400, width: '100%', mx: 2 }}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h4" align="center" sx={{ mb: 3, fontWeight: 700, letterSpacing: 3 }}>
-            LOCUS
+            LOCUS booking
           </Typography>
           <Typography variant="body2" align="center" sx={{ mb: 3, color: 'text.secondary' }}>
             System rezerwacji hotelowych

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMediaQuery } from '@mui/material';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Typography, Button, Table, TableHead, TableRow, TableCell, TableBody,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
@@ -53,8 +53,11 @@ export default function ReservationsPage() {
   const { hotelId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const filterParam = searchParams.get('filter');
+  const yearParam = searchParams.get('year') || '';
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [open, setOpen] = useState(false);
@@ -65,11 +68,13 @@ export default function ReservationsPage() {
   const [unavailableError, setUnavailableError] = useState('');
   const [filterGuest, setFilterGuest] = useState('');
   const [filterRoom, setFilterRoom] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState('');
-  const [filterDateTo, setFilterDateTo] = useState('');
-  const initState = location.state as { openNew?: boolean; email?: string; preliminary?: boolean; confirmed?: boolean; inquiry?: Inquiry } | null;
-  const [filterPreliminary, setFilterPreliminary] = useState(initState?.preliminary === true);
-  const [filterConfirmed, setFilterConfirmed] = useState(initState?.confirmed === true);
+  const [filterDateFrom, setFilterDateFrom] = useState(filterParam === 'archive' && yearParam ? `${yearParam}-01-01` : '');
+  const [filterDateTo, setFilterDateTo] = useState(filterParam === 'archive' && yearParam ? `${yearParam}-12-31` : '');
+  const [filterPreliminary, setFilterPreliminary] = useState(filterParam === 'preliminary');
+  const [filterConfirmed, setFilterConfirmed] = useState(filterParam === 'confirmed');
+  const [filterSettled] = useState(filterParam === 'archive');
+  const [archiveYear] = useState(filterParam === 'archive' ? yearParam : '');
+  const initState = location.state as { openNew?: boolean; email?: string; inquiry?: Inquiry } | null;
   const [openInquiry, setOpenInquiry] = useState<Inquiry | null>(initState?.inquiry || null);
 
   const load = () => {
@@ -79,7 +84,8 @@ export default function ReservationsPage() {
     if (filterDateFrom) url += `date_from=${filterDateFrom}&`;
     if (filterDateTo) url += `date_to=${filterDateTo}&`;
     if (filterPreliminary) url += `deposit_paid=false&`;
-    if (filterConfirmed) url += `deposit_paid=true&`;
+    if (filterConfirmed) url += `deposit_paid=true&is_settled=false&`;
+    if (filterSettled) url += `is_settled=true&`;
     api.get(url).then(r => {
       const list: Reservation[] = r.data.results || r.data;
       list.sort((a, b) => Number(a.is_settled) - Number(b.is_settled));
@@ -92,7 +98,7 @@ export default function ReservationsPage() {
   }, [hotelId]);
 
   useEffect(() => {
-    const state = location.state as { openNew?: boolean; email?: string; preliminary?: boolean; confirmed?: boolean; inquiry?: Inquiry } | null;
+    const state = location.state as { openNew?: boolean; email?: string; inquiry?: Inquiry } | null;
     if (state?.openNew) {
       setForm({ ...emptyForm, contact_email: state.email || '' });
       setEditId(null);
@@ -106,13 +112,13 @@ export default function ReservationsPage() {
     }
   }, [location.state]);
 
-  useEffect(() => { load(); }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo, filterPreliminary, filterConfirmed]);
+  useEffect(() => { load(); }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo, filterPreliminary, filterConfirmed, filterSettled]);
 
   // Auto-refresh every 60 seconds to pick up new mail flags
   useEffect(() => {
     const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
-  }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo, filterPreliminary, filterConfirmed]);
+  }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo, filterPreliminary, filterConfirmed, filterSettled]);
 
   const applyAutoPrice = (patch: Partial<typeof emptyForm>, currentForm = form) => {
     const merged = { ...currentForm, ...patch };
@@ -179,7 +185,7 @@ export default function ReservationsPage() {
         Powrót
       </Button>
       <Typography variant="h5" sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        {filterConfirmed ? 'Rezerwacje potwierdzone' : filterPreliminary ? 'Rezerwacje wstępne' : 'Rezerwacje'}
+        {archiveYear ? `Archiwum ${archiveYear}` : filterConfirmed ? 'Rezerwacje potwierdzone' : filterPreliminary ? 'Rezerwacje wstępne' : 'Rezerwacje'}
         <Button variant="contained" startIcon={<Add />} onClick={() => { setForm(emptyForm); setEditId(null); setPriceAutoCalc(false); setUnavailableError(''); setOpenInquiry(null); setOpen(true); }}>
           Nowa rezerwacja
         </Button>
@@ -210,6 +216,12 @@ export default function ReservationsPage() {
           }
         >
           Wyświetlane: rezerwacje potwierdzone (z wpłaconą zaliczką)
+        </Alert>
+      )}
+
+      {filterSettled && archiveYear && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Wyświetlane: rozliczone rezerwacje z roku {archiveYear}
         </Alert>
       )}
 

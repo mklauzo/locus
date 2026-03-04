@@ -41,6 +41,7 @@ urlpatterns = [
     path('hotels/<int:hotel_pk>/search-inquiries/', views.search_inquiries, name='search_inquiries'),
     path('hotels/<int:hotel_pk>/send-inquiry-reply/', views.send_inquiry_reply, name='send_inquiry_reply'),
     path('hotels/<int:hotel_pk>/generate-inquiry-reply/', views.generate_inquiry_reply, name='generate_inquiry_reply'),
+    path('hotels/<int:hotel_pk>/archive-years/', views.archive_years, name='archive_years'),
     path('hotels/<int:hotel_pk>/calendar/', views.calendar_view, name='calendar'),
     path('hotels/<int:hotel_pk>/ai-assistant/', views.AIAssistantViewSet.as_view({
         'get': 'list', 'post': 'create',

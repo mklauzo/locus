@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models import Q
+from django.utils import timezone
 from .models import Hotel, Room, RoomPricing, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
 from .serializers import (
     UserSerializer, UserMeSerializer, HotelSerializer, RoomSerializer,
@@ -227,6 +228,10 @@ class ReservationViewSet(viewsets.ModelViewSet):
         deposit_paid = self.request.query_params.get('deposit_paid')
         if deposit_paid is not None:
             qs = qs.filter(deposit_paid=deposit_paid.lower() in ('true', '1', 'yes'))
+
+        is_settled = self.request.query_params.get('is_settled')
+        if is_settled is not None:
+            qs = qs.filter(is_settled=is_settled.lower() in ('true', '1', 'yes'))
 
         return qs
 
@@ -1035,6 +1040,19 @@ def generate_inquiry_reply(request, hotel_pk):
 
 
 # --- Calendar ---
+
+@api_view(['GET'])
+def archive_years(request, hotel_pk):
+    current_year = timezone.now().year
+    years = (
+        Reservation.objects
+        .filter(hotel_id=hotel_pk, is_settled=True, is_deleted=False, check_in__year__lt=current_year)
+        .values_list('check_in__year', flat=True)
+        .distinct()
+        .order_by('-check_in__year')
+    )
+    return Response(list(years))
+
 
 @api_view(['GET'])
 def calendar_view(request, hotel_pk):
