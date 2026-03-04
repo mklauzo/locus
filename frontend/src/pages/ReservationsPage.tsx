@@ -8,9 +8,9 @@ import {
   useTheme,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { Add, Visibility, Delete, ArrowBack, MailOutline } from '@mui/icons-material';
+import { Add, Visibility, Delete, ArrowBack, MailOutline, FilterAltOff } from '@mui/icons-material';
 import api from '../api';
-import { Reservation, Room } from '../types';
+import { Reservation, Room, Inquiry } from '../types';
 
 const PL_MONTHS = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
   'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
@@ -67,6 +67,10 @@ export default function ReservationsPage() {
   const [filterRoom, setFilterRoom] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const initState = location.state as { openNew?: boolean; email?: string; preliminary?: boolean; confirmed?: boolean; inquiry?: Inquiry } | null;
+  const [filterPreliminary, setFilterPreliminary] = useState(initState?.preliminary === true);
+  const [filterConfirmed, setFilterConfirmed] = useState(initState?.confirmed === true);
+  const [openInquiry, setOpenInquiry] = useState<Inquiry | null>(initState?.inquiry || null);
 
   const load = () => {
     let url = `/hotels/${hotelId}/reservations/?`;
@@ -74,7 +78,13 @@ export default function ReservationsPage() {
     if (filterRoom) url += `room=${filterRoom}&`;
     if (filterDateFrom) url += `date_from=${filterDateFrom}&`;
     if (filterDateTo) url += `date_to=${filterDateTo}&`;
-    api.get(url).then(r => setReservations(r.data.results || r.data));
+    if (filterPreliminary) url += `deposit_paid=false&`;
+    if (filterConfirmed) url += `deposit_paid=true&`;
+    api.get(url).then(r => {
+      const list: Reservation[] = r.data.results || r.data;
+      list.sort((a, b) => Number(a.is_settled) - Number(b.is_settled));
+      setReservations(list);
+    });
   };
 
   useEffect(() => {
@@ -82,24 +92,27 @@ export default function ReservationsPage() {
   }, [hotelId]);
 
   useEffect(() => {
-    const state = location.state as { openNew?: boolean; email?: string } | null;
+    const state = location.state as { openNew?: boolean; email?: string; preliminary?: boolean; confirmed?: boolean; inquiry?: Inquiry } | null;
     if (state?.openNew) {
       setForm({ ...emptyForm, contact_email: state.email || '' });
       setEditId(null);
       setPriceAutoCalc(false);
       setUnavailableError('');
+      setOpenInquiry(state.inquiry || null);
       setOpen(true);
+    }
+    if (state) {
       window.history.replaceState({}, '');
     }
   }, [location.state]);
 
-  useEffect(() => { load(); }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo]);
+  useEffect(() => { load(); }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo, filterPreliminary, filterConfirmed]);
 
   // Auto-refresh every 60 seconds to pick up new mail flags
   useEffect(() => {
     const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
-  }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo]);
+  }, [hotelId, filterGuest, filterRoom, filterDateFrom, filterDateTo, filterPreliminary, filterConfirmed]);
 
   const applyAutoPrice = (patch: Partial<typeof emptyForm>, currentForm = form) => {
     const merged = { ...currentForm, ...patch };
@@ -166,11 +179,39 @@ export default function ReservationsPage() {
         Powrót
       </Button>
       <Typography variant="h5" sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        Rezerwacje
-        <Button variant="contained" startIcon={<Add />} onClick={() => { setForm(emptyForm); setEditId(null); setPriceAutoCalc(false); setUnavailableError(''); setOpen(true); }}>
+        {filterConfirmed ? 'Rezerwacje potwierdzone' : filterPreliminary ? 'Rezerwacje wstępne' : 'Rezerwacje'}
+        <Button variant="contained" startIcon={<Add />} onClick={() => { setForm(emptyForm); setEditId(null); setPriceAutoCalc(false); setUnavailableError(''); setOpenInquiry(null); setOpen(true); }}>
           Nowa rezerwacja
         </Button>
       </Typography>
+
+      {filterPreliminary && (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" startIcon={<FilterAltOff />} onClick={() => setFilterPreliminary(false)}>
+              Pokaż wszystkie
+            </Button>
+          }
+        >
+          Wyświetlane: rezerwacje wstępne (bez wpłaconej zaliczki)
+        </Alert>
+      )}
+
+      {filterConfirmed && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" startIcon={<FilterAltOff />} onClick={() => setFilterConfirmed(false)}>
+              Pokaż wszystkie
+            </Button>
+          }
+        >
+          Wyświetlane: rezerwacje potwierdzone (z wpłaconą zaliczką)
+        </Alert>
+      )}
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'auto auto auto auto' }, gap: 1.5, mb: 2 }}>
         <TextField label="Szukaj gościa" size="small" value={filterGuest}
@@ -261,61 +302,97 @@ export default function ReservationsPage() {
         </Table>
       </TableContainer>
 
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
+      <Dialog
+        open={open}
+        onClose={() => { setOpen(false); setOpenInquiry(null); }}
+        maxWidth={openInquiry ? 'lg' : 'sm'}
+        fullWidth
+        fullScreen={isMobile}
+      >
         <DialogTitle>{editId ? 'Edytuj rezerwację' : 'Nowa rezerwacja'}</DialogTitle>
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
-          {error && <Alert severity="error">{error}</Alert>}
-          <TextField label="Imię" value={form.guest_first_name}
-            onChange={e => setForm({ ...form, guest_first_name: e.target.value })} fullWidth />
-          <TextField label="Nazwisko" value={form.guest_last_name}
-            onChange={e => setForm({ ...form, guest_last_name: e.target.value })} fullWidth />
-          <TextField label="Pokój" select value={form.room}
-            onChange={e => setForm(applyAutoPrice({ room: e.target.value }))} fullWidth>
-            {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} os.)</MenuItem>)}
-          </TextField>
-          <TextField label="Osoby towarzyszące" type="number" value={form.companions}
-            onChange={e => {
-              const selectedRoom = rooms.find(r => r.id === Number(form.room));
-              const max = selectedRoom ? selectedRoom.capacity - 1 : 99;
-              setForm({ ...form, companions: Math.min(max, Math.max(0, +e.target.value)) });
-            }}
-            helperText={(() => { const r = rooms.find(rm => rm.id === Number(form.room)); return r ? `Max: ${r.capacity - 1} (pojemność pokoju: ${r.capacity})` : ''; })()} />
-          <TextField label="Zwierzęta" type="number" value={form.animals}
-            onChange={e => setForm({ ...form, animals: Math.max(0, +e.target.value) })} />
-          <TextField label="Data zameldowania" type="date" InputLabelProps={{ shrink: true }}
-            value={form.check_in} onChange={e => setForm(applyAutoPrice({ check_in: e.target.value }))} />
-          <TextField label="Data wymeldowania" type="date" InputLabelProps={{ shrink: true }}
-            value={form.check_out} onChange={e => setForm(applyAutoPrice({ check_out: e.target.value }))} />
-          <FormControlLabel control={<Checkbox checked={form.deposit_paid}
-            onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label="Zaliczka wpłacona" />
-          {form.deposit_paid && (
-            <>
-              <TextField label="Kwota zaliczki" type="number" value={form.deposit_amount}
-                onChange={e => setForm({ ...form, deposit_amount: e.target.value })} />
-              <TextField label="Data wpłaty" type="date" InputLabelProps={{ shrink: true }}
-                value={form.deposit_date} onChange={e => setForm({ ...form, deposit_date: e.target.value })} />
-            </>
+        <DialogContent sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 0, p: 0, pt: '0 !important' }}>
+
+          {/* ── Panel emaila (lewa strona) ── */}
+          {openInquiry && (
+            <Box sx={{
+              width: { md: '45%' }, flexShrink: 0,
+              borderRight: { md: 1 }, borderBottom: { xs: 1, md: 0 }, borderColor: 'divider',
+              display: 'flex', flexDirection: 'column',
+              bgcolor: 'action.hover',
+            }}>
+              <Box sx={{ px: 2, pt: 2, pb: 1, borderBottom: 1, borderColor: 'divider' }}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Treść zapytania</Typography>
+                <Typography variant="body2" fontWeight={600} noWrap>{openInquiry.subject || '(brak tematu)'}</Typography>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Od: <strong>{openInquiry.from_name}</strong> &lt;{openInquiry.from_email}&gt;
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {new Date(openInquiry.date).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })}
+                </Typography>
+              </Box>
+              <Box sx={{ px: 2, py: 1.5, overflow: 'auto', flex: 1 }}>
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6 }}>
+                  {openInquiry.body_preview || '(brak treści)'}
+                </Typography>
+              </Box>
+            </Box>
           )}
-          {unavailableError && <Alert severity="error">{unavailableError}</Alert>}
-          {!unavailableError && (
-            <TextField
-              label="Kwota do zapłaty"
-              type="number"
-              value={form.remaining_amount}
-              onChange={e => { setPriceAutoCalc(false); setForm({ ...form, remaining_amount: e.target.value }); }}
-              helperText={priceAutoCalc ? 'Obliczono automatycznie na podstawie cennika' : undefined}
-              color={priceAutoCalc ? 'success' : undefined}
-            />
-          )}
-          <TextField label="Email kontaktowy" value={form.contact_email}
-            onChange={e => setForm({ ...form, contact_email: e.target.value })} />
-          <TextField label="Telefon" value={form.contact_phone}
-            onChange={e => setForm({ ...form, contact_phone: e.target.value })} />
-          <TextField label="Uwagi" multiline rows={3} value={form.notes}
-            onChange={e => setForm({ ...form, notes: e.target.value })} />
+
+          {/* ── Formularz (prawa strona) ── */}
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, p: 2, overflow: 'auto' }}>
+            {error && <Alert severity="error">{error}</Alert>}
+            <TextField label="Imię" value={form.guest_first_name}
+              onChange={e => setForm({ ...form, guest_first_name: e.target.value })} fullWidth />
+            <TextField label="Nazwisko" value={form.guest_last_name}
+              onChange={e => setForm({ ...form, guest_last_name: e.target.value })} fullWidth />
+            <TextField label="Pokój" select value={form.room}
+              onChange={e => setForm(applyAutoPrice({ room: e.target.value }))} fullWidth>
+              {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} os.)</MenuItem>)}
+            </TextField>
+            <TextField label="Osoby towarzyszące" type="number" value={form.companions}
+              onChange={e => {
+                const selectedRoom = rooms.find(r => r.id === Number(form.room));
+                const max = selectedRoom ? selectedRoom.capacity - 1 : 99;
+                setForm({ ...form, companions: Math.min(max, Math.max(0, +e.target.value)) });
+              }}
+              helperText={(() => { const r = rooms.find(rm => rm.id === Number(form.room)); return r ? `Max: ${r.capacity - 1} (pojemność pokoju: ${r.capacity})` : ''; })()} />
+            <TextField label="Zwierzęta" type="number" value={form.animals}
+              onChange={e => setForm({ ...form, animals: Math.max(0, +e.target.value) })} />
+            <TextField label="Data zameldowania" type="date" InputLabelProps={{ shrink: true }}
+              value={form.check_in} onChange={e => setForm(applyAutoPrice({ check_in: e.target.value }))} />
+            <TextField label="Data wymeldowania" type="date" InputLabelProps={{ shrink: true }}
+              value={form.check_out} onChange={e => setForm(applyAutoPrice({ check_out: e.target.value }))} />
+            <FormControlLabel control={<Checkbox checked={form.deposit_paid}
+              onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label="Zaliczka wpłacona" />
+            {form.deposit_paid && (
+              <>
+                <TextField label="Kwota zaliczki" type="number" value={form.deposit_amount}
+                  onChange={e => setForm({ ...form, deposit_amount: e.target.value })} />
+                <TextField label="Data wpłaty" type="date" InputLabelProps={{ shrink: true }}
+                  value={form.deposit_date} onChange={e => setForm({ ...form, deposit_date: e.target.value })} />
+              </>
+            )}
+            {unavailableError && <Alert severity="error">{unavailableError}</Alert>}
+            {!unavailableError && (
+              <TextField
+                label="Kwota do zapłaty"
+                type="number"
+                value={form.remaining_amount}
+                onChange={e => { setPriceAutoCalc(false); setForm({ ...form, remaining_amount: e.target.value }); }}
+                helperText={priceAutoCalc ? 'Obliczono automatycznie na podstawie cennika' : undefined}
+                color={priceAutoCalc ? 'success' : undefined}
+              />
+            )}
+            <TextField label="Email kontaktowy" value={form.contact_email}
+              onChange={e => setForm({ ...form, contact_email: e.target.value })} />
+            <TextField label="Telefon" value={form.contact_phone}
+              onChange={e => setForm({ ...form, contact_phone: e.target.value })} />
+            <TextField label="Uwagi" multiline rows={3} value={form.notes}
+              onChange={e => setForm({ ...form, notes: e.target.value })} />
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Anuluj</Button>
+          <Button onClick={() => { setOpen(false); setOpenInquiry(null); }}>Anuluj</Button>
           <Button variant="contained" onClick={handleSave} disabled={!!unavailableError}>Zapisz</Button>
         </DialogActions>
       </Dialog>

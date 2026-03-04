@@ -223,6 +223,11 @@ class ReservationViewSet(viewsets.ModelViewSet):
             qs = qs.filter(check_out__gte=date_from)
         if date_to:
             qs = qs.filter(check_in__lte=date_to)
+
+        deposit_paid = self.request.query_params.get('deposit_paid')
+        if deposit_paid is not None:
+            qs = qs.filter(deposit_paid=deposit_paid.lower() in ('true', '1', 'yes'))
+
         return qs
 
     def perform_create(self, serializer):
@@ -935,6 +940,98 @@ def search_inquiries(request, hotel_pk):
         return Response({'detail': f'Błąd IMAP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response({'detail': f'Błąd połączenia: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# --- Standalone inquiry reply ---
+
+@api_view(['POST'])
+def send_inquiry_reply(request, hotel_pk):
+    """Send a standalone email reply to an inquiry (no reservation required)."""
+    import smtplib
+    import email as email_lib
+    import uuid
+    from email.mime.text import MIMEText
+
+    hotel = get_object_or_404(Hotel, pk=hotel_pk)
+    to_email = request.data.get('to_email', '').strip()
+    subject = request.data.get('subject', '').strip()
+    body = request.data.get('body', '').strip()
+
+    if not to_email or not subject or not body:
+        return Response({'detail': 'Wypełnij adres e-mail, temat i treść.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not hotel.smtp_host or not hotel.smtp_login or not hotel.smtp_password:
+        return Response({'detail': 'Hotel nie ma skonfigurowanego SMTP — skonfiguruj go w ustawieniach hotelu.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['From'] = hotel.email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg['Date'] = email_lib.utils.formatdate(localtime=True)
+        msg['Message-ID'] = f'<inquiry-reply-{uuid.uuid4()}@locus>'
+
+        if hotel.smtp_ssl:
+            server = smtplib.SMTP_SSL(hotel.smtp_host, hotel.smtp_port, timeout=30)
+        else:
+            server = smtplib.SMTP(hotel.smtp_host, hotel.smtp_port, timeout=30)
+            server.starttls()
+
+        server.login(hotel.smtp_login, hotel.smtp_password)
+        server.sendmail(hotel.email, [to_email], msg.as_string())
+        server.quit()
+        return Response({'status': 'sent'})
+
+    except smtplib.SMTPAuthenticationError as e:
+        return Response({'detail': f'Błąd logowania SMTP: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+    except Exception as e:
+        return Response({'detail': f'Błąd wysyłania: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@api_view(['POST'])
+def generate_inquiry_reply(request, hotel_pk):
+    """Generate an AI draft reply to an inquiry (no reservation required)."""
+    hotel = get_object_or_404(Hotel, pk=hotel_pk)
+    assistant = AIAssistant.objects.prefetch_related('documents').filter(
+        hotel=hotel, is_active=True
+    ).first()
+
+    if not assistant:
+        return Response({'detail': 'Brak aktywnego asystenta AI dla tego hotelu.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not assistant.llm_api_key and not assistant.llm_model.startswith('ollama:'):
+        return Response({'detail': 'Asystent AI nie ma skonfigurowanego klucza API.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from_name = request.data.get('from_name', '').strip()
+    from_email = request.data.get('from_email', '').strip()
+    original_subject = request.data.get('subject', '').strip()
+    original_body = request.data.get('body_preview', '').strip()
+    purpose = request.data.get('purpose', '').strip()
+
+    docs_context = ''
+    for doc in assistant.documents.all():
+        docs_context += f'\n\n--- Dokument: {doc.name} ---\n{doc.content[:2000]}'
+
+    system = (assistant.system_prompt or
+              'Jesteś pomocnym asystentem hotelowym. Piszesz emaile do gości w imieniu hotelu. '
+              'Bądź uprzejmy, profesjonalny i pomocny.')
+    if docs_context:
+        system += f'\n\nDodatkowe informacje o hotelu:\n{docs_context}'
+
+    user_message = (
+        f'Napisz odpowiedź na poniższe zapytanie. Napisz tylko treść emaila, bez tematu.\n\n'
+        f'Nadawca: {from_name} <{from_email}>\n'
+        f'Temat: {original_subject}\n'
+        f'Treść zapytania:\n{original_body}\n'
+        + (f'\nWskazówki dotyczące odpowiedzi: {purpose}\n' if purpose else '')
+    )
+
+    try:
+        draft = _call_llm_api(
+            assistant.llm_model, assistant.llm_api_key, system, user_message,
+            ollama_url=assistant.ollama_url or 'http://ollama:11434',
+        )
+        return Response({'draft': draft})
+    except Exception as e:
+        return Response({'detail': f'Błąd generowania: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 # --- Calendar ---

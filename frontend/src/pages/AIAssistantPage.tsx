@@ -4,6 +4,7 @@ import {
   Typography, Card, CardContent, Button, Box, Alert, CircularProgress,
   TextField, MenuItem, ListSubheader, IconButton, Divider, Chip,
   Dialog, DialogTitle, DialogContent, DialogActions, Tooltip, InputAdornment,
+  Switch, FormControlLabel,
 } from '@mui/material';
 import {
   ArrowBack, SmartToy, Add, Save, Delete, UploadFile,
@@ -190,6 +191,16 @@ export default function AIAssistantPage() {
       await api.delete(`/hotels/${hotelId}/ai-assistant/${assistant.id}/`);
       load();
     } catch {}
+  };
+
+  const handleToggleActive = async (assistant: AIAssistant) => {
+    try {
+      await api.patch(`/hotels/${hotelId}/ai-assistant/${assistant.id}/`, { is_active: !assistant.is_active });
+      load();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Błąd zmiany stanu asystenta.';
+      setAlert({ type: 'error', text: msg });
+    }
   };
 
   const handleUploadClick = (assistantId: number) => {
@@ -383,6 +394,16 @@ export default function AIAssistantPage() {
             helperText={`${form.system_prompt.length}/4000 znaków`}
             inputProps={{ maxLength: 4000 }}
           />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={form.is_active}
+                onChange={e => setForm({ ...form, is_active: e.target.checked })}
+                color="success"
+              />
+            }
+            label="Asystent aktywny"
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setShowForm(false)}>Anuluj</Button>
@@ -463,17 +484,28 @@ export default function AIAssistantPage() {
         <Card key={assistant.id} sx={{ mb: 3 }}>
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <SmartToy color="primary" />
-                <Typography variant="h6">{assistant.name}</Typography>
-                <Chip
-                  label={assistant.is_active ? 'Aktywny' : 'Nieaktywny'}
-                  color={assistant.is_active ? 'success' : 'default'}
-                  size="small"
-                />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                <SmartToy color={assistant.is_active ? 'primary' : 'disabled'} />
+                <Typography variant="h6" color={assistant.is_active ? 'text.primary' : 'text.disabled'}>
+                  {assistant.name}
+                </Typography>
                 <Chip label={assistant.llm_model} size="small" variant="outlined" />
               </Box>
-              <Box sx={{ display: 'flex', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Tooltip title={assistant.is_active ? 'Wyłącz asystenta' : 'Włącz asystenta'}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={assistant.is_active}
+                        onChange={() => handleToggleActive(assistant)}
+                        color="success"
+                        size="small"
+                      />
+                    }
+                    label={assistant.is_active ? 'Aktywny' : 'Nieaktywny'}
+                    sx={{ mr: 0 }}
+                  />
+                </Tooltip>
                 <Button size="small" variant="outlined" onClick={() => handleEdit(assistant)}>
                   Edytuj
                 </Button>

@@ -128,6 +128,17 @@ export interface CalendarEntry {
   check_in: string;
   check_out: string;
   companions: number;
+  deposit_paid: boolean;
+  is_settled: boolean;
+}
+
+export interface Inquiry {
+  message_id: string;
+  from_name: string;
+  from_email: string;
+  subject: string;
+  date: string;
+  body_preview: string;
 }
 
 export interface WeatherData {

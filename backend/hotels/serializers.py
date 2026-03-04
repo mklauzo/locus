@@ -220,4 +220,4 @@ class CalendarSerializer(serializers.ModelSerializer):
         model = Reservation
         fields = ['id', 'room', 'room_number', 'room_capacity', 'guest_first_name',
                   'guest_last_name', 'guest_name',
-                  'check_in', 'check_out', 'companions']
+                  'check_in', 'check_out', 'companions', 'deposit_paid', 'is_settled']

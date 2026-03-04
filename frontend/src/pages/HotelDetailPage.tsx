@@ -3,21 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Typography, Card, CardContent, Grid, Button, Box, Chip, Alert, CircularProgress,
   Dialog, DialogTitle, DialogContent, DialogActions, List, ListItem, ListItemText,
+  TextField, Divider,
 } from '@mui/material';
 import {
-  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search,
+  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search, PendingActions, Reply, AutoAwesome,
 } from '@mui/icons-material';
 import api from '../api';
-import { Hotel } from '../types';
-
-interface Inquiry {
-  message_id: string;
-  from_name: string;
-  from_email: string;
-  subject: string;
-  date: string;
-  body_preview: string;
-}
+import { Hotel, Inquiry } from '../types';
 
 export default function HotelDetailPage() {
   const { id } = useParams();
@@ -32,10 +24,25 @@ export default function HotelDetailPage() {
   const [inquiriesLoading, setInquiriesLoading] = useState(false);
   const [inquiriesError, setInquiriesError] = useState<string | null>(null);
   const [emailChecking, setEmailChecking] = useState<string | null>(null);
-  const [emailExistsDialog, setEmailExistsDialog] = useState<{ email: string; reservations: any[] } | null>(null);
+  const [emailExistsDialog, setEmailExistsDialog] = useState<{ email: string; reservations: any[]; inquiry: Inquiry | null } | null>(null);
+  const [replyDialog, setReplyDialog] = useState<Inquiry | null>(null);
+  const [replyForm, setReplyForm] = useState({ subject: '', body: '' });
+  const [replySending, setReplySending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [replySuccess, setReplySuccess] = useState(false);
+  const [replyAiPurpose, setReplyAiPurpose] = useState('');
+  const [replyAiLoading, setReplyAiLoading] = useState(false);
+  const [reservationCount, setReservationCount] = useState<number | null>(null);
+  const [preliminaryCount, setPreliminaryCount] = useState<number | null>(null);
 
   useEffect(() => {
     api.get(`/hotels/${id}/`).then(r => setHotel(r.data));
+    api.get(`/hotels/${id}/reservations/?deposit_paid=true`).then(r => {
+      setReservationCount(r.data.count ?? (r.data.results || r.data).length);
+    });
+    api.get(`/hotels/${id}/reservations/?deposit_paid=false`).then(r => {
+      setPreliminaryCount(r.data.count ?? (r.data.results || r.data).length);
+    });
   }, [id]);
 
   const handleTestImap = async () => {
@@ -79,22 +86,68 @@ export default function HotelDetailPage() {
     }
   };
 
-  const handleInquiryAction = async (email: string) => {
-    setEmailChecking(email);
+  const handleInquiryAction = async (inq: Inquiry) => {
+    setEmailChecking(inq.from_email);
     try {
-      const res = await api.get(`/hotels/${id}/reservations/?search=${encodeURIComponent(email)}`);
+      const res = await api.get(`/hotels/${id}/reservations/?search=${encodeURIComponent(inq.from_email)}`);
       const results = res.data.results || res.data;
       if (results.length > 0) {
-        setEmailExistsDialog({ email, reservations: results });
+        setEmailExistsDialog({ email: inq.from_email, reservations: results, inquiry: inq });
       } else {
         setInquiriesOpen(false);
-        navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email } });
+        navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email: inq.from_email, inquiry: inq } });
       }
     } catch {
       setInquiriesOpen(false);
-      navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email } });
+      navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email: inq.from_email, inquiry: inq } });
     } finally {
       setEmailChecking(null);
+    }
+  };
+
+  const handleOpenReply = (inq: Inquiry) => {
+    setReplyDialog(inq);
+    setReplyForm({ subject: `Re: ${inq.subject}`, body: '' });
+    setReplyError(null);
+    setReplySuccess(false);
+    setReplyAiPurpose('');
+  };
+
+  const handleAiDraftReply = async () => {
+    if (!replyDialog) return;
+    setReplyAiLoading(true);
+    setReplyError(null);
+    try {
+      const res = await api.post(`/hotels/${id}/generate-inquiry-reply/`, {
+        from_name: replyDialog.from_name,
+        from_email: replyDialog.from_email,
+        subject: replyDialog.subject,
+        body_preview: replyDialog.body_preview,
+        purpose: replyAiPurpose,
+      });
+      setReplyForm(f => ({ ...f, body: res.data.draft }));
+    } catch (err: any) {
+      setReplyError(err.response?.data?.detail || 'Błąd generowania szkicu AI.');
+    } finally {
+      setReplyAiLoading(false);
+    }
+  };
+
+  const handleSendReply = async () => {
+    if (!replyDialog) return;
+    setReplySending(true);
+    setReplyError(null);
+    try {
+      await api.post(`/hotels/${id}/send-inquiry-reply/`, {
+        to_email: replyDialog.from_email,
+        subject: replyForm.subject,
+        body: replyForm.body,
+      });
+      setReplySuccess(true);
+    } catch (err: any) {
+      setReplyError(err.response?.data?.detail || 'Błąd wysyłania wiadomości.');
+    } finally {
+      setReplySending(false);
     }
   };
 
@@ -156,26 +209,50 @@ export default function HotelDetailPage() {
       </Card>
 
       <Grid container spacing={2}>
+        {hotel.imap_host && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card
+              sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 }, position: 'relative' }}
+              onClick={() => setInquiriesOpen(true)}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                <MailOutline sx={{ fontSize: 48, color: 'warning.main', mb: 1 }} />
+                <Typography variant="h6">Nowe zapytania</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Sprawdź nieznanych nadawców
+                </Typography>
+                {inquiries !== null && inquiries.length > 0 && (
+                  <Chip
+                    label={inquiries.length}
+                    color="error"
+                    size="small"
+                    sx={{ position: 'absolute', top: 8, right: 8 }}
+                  />
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
         <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
-                onClick={() => navigate(`/hotels/${id}/rooms`)}>
+                onClick={() => navigate(`/hotels/${id}/reservations`, { state: { preliminary: true } })}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
-              <MeetingRoom sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h6">Pokoje</Typography>
+              <PendingActions sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
+              <Typography variant="h6">Rezerwacje wstępne</Typography>
               <Typography variant="body2" color="text.secondary">
-                Zarządzaj pokojami ({hotel.rooms.length})
+                Bez wpłaconej zaliczki{preliminaryCount !== null ? ` (${preliminaryCount})` : ''}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
-                onClick={() => navigate(`/hotels/${id}/reservations`)}>
+                onClick={() => navigate(`/hotels/${id}/reservations`, { state: { confirmed: true } })}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <EventNote sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h6">Rezerwacje</Typography>
+              <Typography variant="h6">Rezerwacje potwierdzone</Typography>
               <Typography variant="body2" color="text.secondary">
-                Zarządzaj rezerwacjami
+                Z wpłaconą zaliczką{reservationCount !== null ? ` (${reservationCount})` : ''}
               </Typography>
             </CardContent>
           </Card>
@@ -204,30 +281,18 @@ export default function HotelDetailPage() {
             </CardContent>
           </Card>
         </Grid>
-        {hotel.imap_host && (
-          <Grid item xs={12} sm={6} md={3}>
-            <Card
-              sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 }, position: 'relative' }}
-              onClick={() => setInquiriesOpen(true)}
-            >
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <MailOutline sx={{ fontSize: 48, color: 'warning.main', mb: 1 }} />
-                <Typography variant="h6">Nowe zapytania</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Sprawdź nieznanych nadawców
-                </Typography>
-                {inquiries !== null && inquiries.length > 0 && (
-                  <Chip
-                    label={inquiries.length}
-                    color="error"
-                    size="small"
-                    sx={{ position: 'absolute', top: 8, right: 8 }}
-                  />
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-        )}
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
+                onClick={() => navigate(`/hotels/${id}/rooms`)}>
+            <CardContent sx={{ textAlign: 'center', py: 4 }}>
+              <MeetingRoom sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
+              <Typography variant="h6">Pokoje</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Zarządzaj pokojami ({hotel.rooms.length})
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
 
       <Dialog open={inquiriesOpen} onClose={() => setInquiriesOpen(false)} maxWidth="md" fullWidth>
@@ -280,16 +345,25 @@ export default function HotelDetailPage() {
                       </>
                     }
                   />
-                  <Button
-                    size="small"
-                    variant="contained"
-                    sx={{ flexShrink: 0, alignSelf: 'flex-start', mt: 0.5 }}
-                    disabled={emailChecking === inq.from_email}
-                    startIcon={emailChecking === inq.from_email ? <CircularProgress size={14} color="inherit" /> : undefined}
-                    onClick={() => handleInquiryAction(inq.from_email)}
-                  >
-                    Dodaj gościa
-                  </Button>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, flexShrink: 0, alignSelf: 'flex-start', mt: 0.5 }}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={emailChecking === inq.from_email}
+                      startIcon={emailChecking === inq.from_email ? <CircularProgress size={14} color="inherit" /> : undefined}
+                      onClick={() => handleInquiryAction(inq)}
+                    >
+                      Dodaj gościa
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<Reply />}
+                      onClick={() => handleOpenReply(inq)}
+                    >
+                      Odpowiedz
+                    </Button>
+                  </Box>
                 </ListItem>
               ))}
             </List>
@@ -297,6 +371,79 @@ export default function HotelDetailPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setInquiriesOpen(false)}>Zamknij</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!replyDialog} onClose={() => !replySending && setReplyDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Odpowiedz na zapytanie
+          {replyDialog && (
+            <Typography variant="body2" color="text.secondary">
+              Do: {replyDialog.from_name} &lt;{replyDialog.from_email}&gt;
+            </Typography>
+          )}
+        </DialogTitle>
+        <DialogContent dividers>
+          {replyDialog && (
+            <Box sx={{ mb: 2, p: 1.5, bgcolor: 'action.hover', borderRadius: 1, fontSize: '0.85rem' }}>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5, fontWeight: 600 }}>
+                Oryginalna wiadomość:
+              </Typography>
+              <Typography variant="body2" sx={{ fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>
+                {replyDialog.body_preview}
+              </Typography>
+            </Box>
+          )}
+          <Divider sx={{ mb: 2 }} />
+          <TextField
+            label="Temat"
+            fullWidth
+            size="small"
+            value={replyForm.subject}
+            onChange={e => setReplyForm(f => ({ ...f, subject: e.target.value }))}
+            sx={{ mb: 2 }}
+          />
+          <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+            <TextField
+              label="Cel wiadomości (dla AI)"
+              fullWidth
+              size="small"
+              placeholder="np. poproś o doprecyzowanie liczby gości i terminu"
+              value={replyAiPurpose}
+              onChange={e => setReplyAiPurpose(e.target.value)}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={replyAiLoading ? <CircularProgress size={14} /> : <AutoAwesome />}
+              onClick={handleAiDraftReply}
+              disabled={replyAiLoading}
+              sx={{ flexShrink: 0 }}
+            >
+              Szkic AI
+            </Button>
+          </Box>
+          <TextField
+            label="Treść odpowiedzi"
+            fullWidth
+            multiline
+            rows={8}
+            value={replyForm.body}
+            onChange={e => setReplyForm(f => ({ ...f, body: e.target.value }))}
+          />
+          {replyError && <Alert severity="error" sx={{ mt: 1.5 }}>{replyError}</Alert>}
+          {replySuccess && <Alert severity="success" sx={{ mt: 1.5 }}>Wiadomość wysłana pomyślnie.</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReplyDialog(null)} disabled={replySending}>Anuluj</Button>
+          <Button
+            variant="contained"
+            startIcon={replySending ? <CircularProgress size={16} color="inherit" /> : <Reply />}
+            onClick={handleSendReply}
+            disabled={replySending || !replyForm.body.trim() || replySuccess}
+          >
+            {replySending ? 'Wysyłanie...' : 'Wyślij'}
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -325,9 +472,10 @@ export default function HotelDetailPage() {
             variant="contained"
             onClick={() => {
               const email = emailExistsDialog?.email || '';
+              const inquiry = emailExistsDialog?.inquiry || null;
               setEmailExistsDialog(null);
               setInquiriesOpen(false);
-              navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email } });
+              navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email, inquiry } });
             }}
           >
             Nowa rezerwacja

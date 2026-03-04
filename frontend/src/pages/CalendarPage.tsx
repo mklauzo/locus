@@ -20,6 +20,13 @@ const COLORS = [
   '#00838f', '#4e342e', '#283593', '#558b2f', '#ad1457',
 ];
 
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 type ViewMode = 'gantt' | 'matrix';
 
 export default function CalendarPage() {
@@ -53,10 +60,22 @@ export default function CalendarPage() {
     [month],
   );
 
+  const PRELIMINARY_COLOR = 'rgba(76, 175, 80, 0.35)'; // transparent green
+  const SETTLED_COLOR = 'rgba(180, 180, 180, 0.55)'; // light gray
+
   // Consistent color per reservation across both views
   const colorMap = useMemo(() => {
     const map: Record<number, string> = {};
-    reservations.forEach((r, idx) => { map[r.id] = COLORS[idx % COLORS.length]; });
+    let colorIdx = 0;
+    reservations.forEach(r => {
+      if (r.is_settled) {
+        map[r.id] = SETTLED_COLOR;
+      } else if (r.deposit_paid) {
+        map[r.id] = hexToRgba(COLORS[colorIdx++ % COLORS.length], 0.72);
+      } else {
+        map[r.id] = PRELIMINARY_COLOR;
+      }
+    });
     return map;
   }, [reservations]);
 
@@ -71,10 +90,16 @@ export default function CalendarPage() {
 
   // Shared bar click/hover style
   const barBase = {
-    borderRadius: 1, color: '#fff', fontSize: 10, px: 0.5,
-    overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+    borderRadius: 1, fontSize: 10, px: 0.5,
+    overflow: 'hidden',
     cursor: 'pointer', '&:hover': { opacity: 0.85 },
   } as const;
+
+  const barColor = (r: CalendarEntry) => {
+    if (r.is_settled) return { color: '#555', border: '1px solid rgba(150,150,150,0.5)' };
+    if (r.deposit_paid) return { color: '#fff' };
+    return { color: '#1b5e20', border: '1px solid rgba(76,175,80,0.7)', fontWeight: 600 };
+  };
 
   // ── Gantt view (rows = rooms, columns = days) ──────────────────────────────
   const renderGantt = () => (
@@ -136,13 +161,19 @@ export default function CalendarPage() {
                       onClick={() => navigate(`/hotels/${hotelId}/reservations/${r.id}`)}
                       sx={{
                         ...barBase,
+                        ...barColor(r),
                         position: 'absolute', left: leftPx, width: widthPx,
                         top: 4, height: 24,
                         bgcolor: colorMap[r.id],
                         display: 'flex', alignItems: 'center',
                       }}
                     >
-                      {r.guest_name}
+                      <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.guest_name}
+                      </Box>
+                      {!r.deposit_paid && (
+                        <Box component="span" sx={{ flexShrink: 0, fontWeight: 700, fontSize: 11, lineHeight: 1, ml: 0.25 }}>?</Box>
+                      )}
                     </Box>
                   </Tooltip>
                 );
@@ -229,13 +260,19 @@ export default function CalendarPage() {
                         onClick={() => navigate(`/hotels/${hotelId}/reservations/${r.id}`)}
                         sx={{
                           ...barBase,
+                          ...barColor(r),
                           position: 'absolute',
                           top: topPx, left: 4, right: 4, height: heightPx,
                           bgcolor: colorMap[r.id],
                           display: 'flex', alignItems: 'flex-start', pt: 0.5,
                         }}
                       >
-                        {r.guest_name}
+                        <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {r.guest_name}
+                        </Box>
+                        {!r.deposit_paid && (
+                          <Box component="span" sx={{ flexShrink: 0, fontWeight: 700, fontSize: 11, lineHeight: 1, ml: 0.25 }}>?</Box>
+                        )}
                       </Box>
                     </Tooltip>
                   );
