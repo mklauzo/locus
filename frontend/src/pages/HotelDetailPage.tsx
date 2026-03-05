@@ -6,14 +6,16 @@ import {
   TextField, Divider,
 } from '@mui/material';
 import {
-  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search, PendingActions, Reply, AutoAwesome, Inventory,
+  MeetingRoom, EventNote, CalendarMonth, ArrowBack, Email, SmartToy, MailOutline, Search, PendingActions, Reply, AutoAwesome, Inventory, BarChart, DeleteOutline,
 } from '@mui/icons-material';
+import { useTranslation } from 'react-i18next';
 import api from '../api';
 import { Hotel, Inquiry } from '../types';
 
 export default function HotelDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const [hotel, setHotel] = useState<Hotel | null>(null);
   const [imapTesting, setImapTesting] = useState(false);
   const [imapResult, setImapResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -32,8 +34,31 @@ export default function HotelDetailPage() {
   const [replySuccess, setReplySuccess] = useState(false);
   const [replyAiPurpose, setReplyAiPurpose] = useState('');
   const [replyAiLoading, setReplyAiLoading] = useState(false);
+  const [deletingInquiry, setDeletingInquiry] = useState<string | null>(null);
   const [reservationCount, setReservationCount] = useState<number | null>(null);
   const [preliminaryCount, setPreliminaryCount] = useState<number | null>(null);
+  const [confirmedNewMail, setConfirmedNewMail] = useState(() =>
+    parseInt(localStorage.getItem(`locus_badge_confirmed_${id}`) || '0')
+  );
+  const [preliminaryNewMail, setPreliminaryNewMail] = useState(() =>
+    parseInt(localStorage.getItem(`locus_badge_preliminary_${id}`) || '0')
+  );
+  const [inquiryBadgeCount, setInquiryBadgeCount] = useState(() =>
+    parseInt(localStorage.getItem(`locus_badge_inquiry_${id}`) || '0')
+  );
+
+  const loadMailCounts = () => {
+    api.get(`/hotels/${id}/reservations/?deposit_paid=true&has_new_mail=true&is_settled=false`).then(r => {
+      const n = r.data.count ?? (r.data.results || r.data).length;
+      setConfirmedNewMail(n);
+      localStorage.setItem(`locus_badge_confirmed_${id}`, String(n));
+    }).catch(() => {});
+    api.get(`/hotels/${id}/reservations/?deposit_paid=false&has_new_mail=true`).then(r => {
+      const n = r.data.count ?? (r.data.results || r.data).length;
+      setPreliminaryNewMail(n);
+      localStorage.setItem(`locus_badge_preliminary_${id}`, String(n));
+    }).catch(() => {});
+  };
 
   useEffect(() => {
     api.get(`/hotels/${id}/`).then(r => setHotel(r.data));
@@ -43,6 +68,12 @@ export default function HotelDetailPage() {
     api.get(`/hotels/${id}/reservations/?deposit_paid=false`).then(r => {
       setPreliminaryCount(r.data.count ?? (r.data.results || r.data).length);
     });
+    loadMailCounts();
+  }, [id]);
+
+  useEffect(() => {
+    const interval = setInterval(loadMailCounts, 60000);
+    return () => clearInterval(interval);
   }, [id]);
 
   const handleTestImap = async () => {
@@ -53,7 +84,7 @@ export default function HotelDetailPage() {
       const res = await api.post(`/hotels/${id}/test_imap/`, {});
       setImapResult({ type: 'success', text: res.data.message });
     } catch (err: any) {
-      setImapResult({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia' });
+      setImapResult({ type: 'error', text: err.response?.data?.message || t('hotels.connectionError') });
     } finally {
       setImapTesting(false);
     }
@@ -67,7 +98,7 @@ export default function HotelDetailPage() {
       const res = await api.post(`/hotels/${id}/test_smtp/`, {});
       setSmtpResult({ type: 'success', text: res.data.message });
     } catch (err: any) {
-      setSmtpResult({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia' });
+      setSmtpResult({ type: 'error', text: err.response?.data?.message || t('hotels.connectionError') });
     } finally {
       setSmtpTesting(false);
     }
@@ -79,8 +110,11 @@ export default function HotelDetailPage() {
     try {
       const res = await api.post(`/hotels/${id}/search-inquiries/`, {});
       setInquiries(res.data);
+      const n = (res.data as any[]).length;
+      setInquiryBadgeCount(n);
+      localStorage.setItem(`locus_badge_inquiry_${id}`, String(n));
     } catch (err: any) {
-      setInquiriesError(err.response?.data?.detail || 'Błąd wyszukiwania zapytań.');
+      setInquiriesError(err.response?.data?.detail || t('hotelDetail.searchError'));
     } finally {
       setInquiriesLoading(false);
     }
@@ -95,13 +129,29 @@ export default function HotelDetailPage() {
         setEmailExistsDialog({ email: inq.from_email, reservations: results, inquiry: inq });
       } else {
         setInquiriesOpen(false);
-        navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email: inq.from_email, inquiry: inq } });
+        navigate(`/hotels/${id}/reservations?filter=preliminary`, { state: { openNew: true, email: inq.from_email, inquiry: inq } });
       }
     } catch {
       setInquiriesOpen(false);
-      navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email: inq.from_email, inquiry: inq } });
+      navigate(`/hotels/${id}/reservations?filter=preliminary`, { state: { openNew: true, email: inq.from_email, inquiry: inq } });
     } finally {
       setEmailChecking(null);
+    }
+  };
+
+  const handleDeleteInquiry = async (inq: Inquiry) => {
+    if (!confirm(t('hotelDetail.deleteInquiryConfirm', { name: inq.from_name }))) return;
+    setDeletingInquiry(inq.message_id);
+    try {
+      await api.post(`/hotels/${id}/delete-inquiry/`, { message_id: inq.message_id });
+      setInquiries(prev => prev ? prev.filter(i => i.message_id !== inq.message_id) : prev);
+      const remaining = (inquiries?.length ?? 1) - 1;
+      setInquiryBadgeCount(remaining);
+      localStorage.setItem(`locus_badge_inquiry_${id}`, String(remaining));
+    } catch (err: any) {
+      alert(err.response?.data?.detail || t('hotelDetail.deleteMessageError'));
+    } finally {
+      setDeletingInquiry(null);
     }
   };
 
@@ -127,7 +177,7 @@ export default function HotelDetailPage() {
       });
       setReplyForm(f => ({ ...f, body: res.data.draft }));
     } catch (err: any) {
-      setReplyError(err.response?.data?.detail || 'Błąd generowania szkicu AI.');
+      setReplyError(err.response?.data?.detail || t('hotelDetail.aiDraftError'));
     } finally {
       setReplyAiLoading(false);
     }
@@ -135,6 +185,10 @@ export default function HotelDetailPage() {
 
   const handleSendReply = async () => {
     if (!replyDialog) return;
+    if (!hotel?.smtp_host) {
+      setReplyError(t('hotelDetail.smtpNotConfigured'));
+      return;
+    }
     setReplySending(true);
     setReplyError(null);
     try {
@@ -145,7 +199,15 @@ export default function HotelDetailPage() {
       });
       setReplySuccess(true);
     } catch (err: any) {
-      setReplyError(err.response?.data?.detail || 'Błąd wysyłania wiadomości.');
+      const detail = err.response?.data?.detail;
+      const httpStatus = err.response?.status;
+      setReplyError(
+        detail
+          ? detail
+          : httpStatus
+            ? t('hotelDetail.serverError', { status: httpStatus })
+            : t('hotelDetail.networkError'),
+      );
     } finally {
       setReplySending(false);
     }
@@ -156,7 +218,7 @@ export default function HotelDetailPage() {
   return (
     <>
       <Button startIcon={<ArrowBack />} onClick={() => navigate('/')} sx={{ mb: 2 }}>
-        Powrót do listy
+        {t('hotelDetail.backToList')}
       </Button>
 
       <Card sx={{ mb: 3 }}>
@@ -175,7 +237,7 @@ export default function HotelDetailPage() {
                   onClick={handleTestImap}
                   disabled={imapTesting}
                 >
-                  Test IMAP
+                  {t('hotels.testImapBtn')}
                 </Button>
               </>
             )}
@@ -189,11 +251,11 @@ export default function HotelDetailPage() {
                   onClick={handleTestSmtp}
                   disabled={smtpTesting}
                 >
-                  Test SMTP
+                  {t('hotels.testSmtpBtn')}
                 </Button>
               </>
             )}
-            <Chip label={`${hotel.rooms.length} pokoi`} size="small" />
+            <Chip label={t('hotels.roomsCount', { count: hotel.rooms.length })} size="small" />
           </Box>
           {imapResult && (
             <Alert severity={imapResult.type} sx={{ mt: 1 }} onClose={() => setImapResult(null)}>
@@ -217,13 +279,13 @@ export default function HotelDetailPage() {
             >
               <CardContent sx={{ textAlign: 'center', py: 4 }}>
                 <MailOutline sx={{ fontSize: 48, color: 'warning.main', mb: 1 }} />
-                <Typography variant="h6">Nowe zapytania</Typography>
+                <Typography variant="h6">{t('hotelDetail.newInquiries')}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Sprawdź nieznanych nadawców
+                  {t('hotelDetail.newInquiriesDesc')}
                 </Typography>
-                {inquiries !== null && inquiries.length > 0 && (
+                {inquiryBadgeCount > 0 && (
                   <Chip
-                    label={inquiries.length}
+                    label={inquiryBadgeCount}
                     color="error"
                     size="small"
                     sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -234,27 +296,47 @@ export default function HotelDetailPage() {
           </Grid>
         )}
         <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
+          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 }, position: 'relative' }}
                 onClick={() => navigate(`/hotels/${id}/reservations?filter=preliminary`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <PendingActions sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
-              <Typography variant="h6">Rezerwacje wstępne</Typography>
+              <Typography variant="h6">{t('hotelDetail.preliminaryReservations')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Bez wpłaconej zaliczki{preliminaryCount !== null ? ` (${preliminaryCount})` : ''}
+                {preliminaryCount !== null
+                  ? t('hotelDetail.preliminaryCount', { count: preliminaryCount })
+                  : t('hotelDetail.preliminaryDesc')}
               </Typography>
             </CardContent>
+            {preliminaryNewMail > 0 && (
+              <Chip
+                label={preliminaryNewMail}
+                color="error"
+                size="small"
+                sx={{ position: 'absolute', top: 8, right: 8 }}
+              />
+            )}
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
+          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 }, position: 'relative' }}
                 onClick={() => navigate(`/hotels/${id}/reservations?filter=confirmed`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <EventNote sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h6">Rezerwacje potwierdzone</Typography>
+              <Typography variant="h6">{t('hotelDetail.confirmedReservations')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Z wpłaconą zaliczką{reservationCount !== null ? ` (${reservationCount})` : ''}
+                {reservationCount !== null
+                  ? t('hotelDetail.confirmedCount', { count: reservationCount })
+                  : t('hotelDetail.confirmedDesc')}
               </Typography>
             </CardContent>
+            {confirmedNewMail > 0 && (
+              <Chip
+                label={confirmedNewMail}
+                color="error"
+                size="small"
+                sx={{ position: 'absolute', top: 8, right: 8 }}
+              />
+            )}
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
@@ -262,9 +344,9 @@ export default function HotelDetailPage() {
                 onClick={() => navigate(`/hotels/${id}/calendar`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <CalendarMonth sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h6">Kalendarz</Typography>
+              <Typography variant="h6">{t('hotelDetail.calendar')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Widok obłożenia pokoi
+                {t('hotelDetail.calendarDesc')}
               </Typography>
             </CardContent>
           </Card>
@@ -274,9 +356,9 @@ export default function HotelDetailPage() {
                 onClick={() => navigate(`/hotels/${id}/ai-assistant`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <SmartToy sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h6">Asystent AI</Typography>
+              <Typography variant="h6">{t('hotelDetail.aiAssistant')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Konfiguracja odpowiedzi e-mail
+                {t('hotelDetail.aiAssistantDesc')}
               </Typography>
             </CardContent>
           </Card>
@@ -286,9 +368,21 @@ export default function HotelDetailPage() {
                 onClick={() => navigate(`/hotels/${id}/rooms`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <MeetingRoom sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h6">Pokoje</Typography>
+              <Typography variant="h6">{t('hotelDetail.rooms')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Zarządzaj pokojami ({hotel.rooms.length})
+                {t('hotelDetail.roomsDesc', { count: hotel.rooms.length })}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
+                onClick={() => navigate(`/hotels/${id}/revenue`)}>
+            <CardContent sx={{ textAlign: 'center', py: 4 }}>
+              <BarChart sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
+              <Typography variant="h6">{t('hotelDetail.revenue')}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {t('hotelDetail.revenueDesc')}
               </Typography>
             </CardContent>
           </Card>
@@ -298,9 +392,9 @@ export default function HotelDetailPage() {
                 onClick={() => navigate(`/hotels/${id}/archive`)}>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               <Inventory sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
-              <Typography variant="h6">Historia</Typography>
+              <Typography variant="h6">{t('hotelDetail.history')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Archiwum rozliczonych rezerwacji
+                {t('hotelDetail.historyDesc')}
               </Typography>
             </CardContent>
           </Card>
@@ -310,7 +404,7 @@ export default function HotelDetailPage() {
       <Dialog open={inquiriesOpen} onClose={() => setInquiriesOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
-            <span>Nowe zapytania z e-mail</span>
+            <span>{t('hotelDetail.inquiriesTitle')}</span>
             <Button
               variant="contained"
               size="small"
@@ -318,7 +412,7 @@ export default function HotelDetailPage() {
               onClick={handleSearchInquiries}
               disabled={inquiriesLoading}
             >
-              {inquiriesLoading ? 'Wyszukiwanie...' : 'Wyszukaj w skrzynce'}
+              {inquiriesLoading ? t('hotelDetail.searching') : t('hotelDetail.searchInbox')}
             </Button>
           </Box>
         </DialogTitle>
@@ -326,11 +420,11 @@ export default function HotelDetailPage() {
           {inquiriesError && <Alert severity="error" sx={{ mb: 2 }}>{inquiriesError}</Alert>}
           {inquiries === null && !inquiriesLoading && (
             <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-              Kliknij „Wyszukaj w skrzynce" aby znaleźć nowe zapytania od nieznanych nadawców (ostatnie 30 dni).
+              {t('hotelDetail.clickToSearch')}
             </Typography>
           )}
           {inquiries !== null && inquiries.length === 0 && (
-            <Alert severity="info">Brak nowych zapytań od nieznanych nadawców w ciągu ostatnich 30 dni.</Alert>
+            <Alert severity="info">{t('hotelDetail.noInquiries')}</Alert>
           )}
           {inquiries && inquiries.length > 0 && (
             <List disablePadding>
@@ -365,7 +459,7 @@ export default function HotelDetailPage() {
                       startIcon={emailChecking === inq.from_email ? <CircularProgress size={14} color="inherit" /> : undefined}
                       onClick={() => handleInquiryAction(inq)}
                     >
-                      Dodaj gościa
+                      {t('hotelDetail.addGuest')}
                     </Button>
                     <Button
                       size="small"
@@ -373,7 +467,17 @@ export default function HotelDetailPage() {
                       startIcon={<Reply />}
                       onClick={() => handleOpenReply(inq)}
                     >
-                      Odpowiedz
+                      {t('common.reply')}
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      startIcon={deletingInquiry === inq.message_id ? <CircularProgress size={14} color="inherit" /> : <DeleteOutline />}
+                      disabled={deletingInquiry === inq.message_id}
+                      onClick={() => handleDeleteInquiry(inq)}
+                    >
+                      {t('common.delete')}
                     </Button>
                   </Box>
                 </ListItem>
@@ -382,16 +486,16 @@ export default function HotelDetailPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setInquiriesOpen(false)}>Zamknij</Button>
+          <Button onClick={() => setInquiriesOpen(false)}>{t('common.close')}</Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!replyDialog} onClose={() => !replySending && setReplyDialog(null)} maxWidth="sm" fullWidth>
         <DialogTitle>
-          Odpowiedz na zapytanie
+          {t('hotelDetail.replyTitle')}
           {replyDialog && (
             <Typography variant="body2" color="text.secondary">
-              Do: {replyDialog.from_name} &lt;{replyDialog.from_email}&gt;
+              {t('hotelDetail.replyTo', { name: replyDialog.from_name, email: replyDialog.from_email })}
             </Typography>
           )}
         </DialogTitle>
@@ -399,7 +503,7 @@ export default function HotelDetailPage() {
           {replyDialog && (
             <Box sx={{ mb: 2, p: 1.5, bgcolor: 'action.hover', borderRadius: 1, fontSize: '0.85rem' }}>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5, fontWeight: 600 }}>
-                Oryginalna wiadomość:
+                {t('hotelDetail.originalMessage')}
               </Typography>
               <Typography variant="body2" sx={{ fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>
                 {replyDialog.body_preview}
@@ -408,7 +512,7 @@ export default function HotelDetailPage() {
           )}
           <Divider sx={{ mb: 2 }} />
           <TextField
-            label="Temat"
+            label={t('common.subject')}
             fullWidth
             size="small"
             value={replyForm.subject}
@@ -417,10 +521,10 @@ export default function HotelDetailPage() {
           />
           <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
             <TextField
-              label="Cel wiadomości (dla AI)"
+              label={t('hotelDetail.aiPurposeLabel')}
               fullWidth
               size="small"
-              placeholder="np. poproś o doprecyzowanie liczby gości i terminu"
+              placeholder={t('hotelDetail.aiPurposePlaceholder')}
               value={replyAiPurpose}
               onChange={e => setReplyAiPurpose(e.target.value)}
             />
@@ -432,11 +536,11 @@ export default function HotelDetailPage() {
               disabled={replyAiLoading}
               sx={{ flexShrink: 0 }}
             >
-              Szkic AI
+              {t('common.aiDraft')}
             </Button>
           </Box>
           <TextField
-            label="Treść odpowiedzi"
+            label={t('hotelDetail.replyContentLabel')}
             fullWidth
             multiline
             rows={8}
@@ -444,42 +548,46 @@ export default function HotelDetailPage() {
             onChange={e => setReplyForm(f => ({ ...f, body: e.target.value }))}
           />
           {replyError && <Alert severity="error" sx={{ mt: 1.5 }}>{replyError}</Alert>}
-          {replySuccess && <Alert severity="success" sx={{ mt: 1.5 }}>Wiadomość wysłana pomyślnie.</Alert>}
+          {replySuccess && <Alert severity="success" sx={{ mt: 1.5 }}>{t('hotelDetail.messageSent')}</Alert>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setReplyDialog(null)} disabled={replySending}>Anuluj</Button>
+          <Button onClick={() => setReplyDialog(null)} disabled={replySending}>{t('common.exit')}</Button>
           <Button
             variant="contained"
             startIcon={replySending ? <CircularProgress size={16} color="inherit" /> : <Reply />}
             onClick={handleSendReply}
             disabled={replySending || !replyForm.body.trim() || replySuccess}
           >
-            {replySending ? 'Wysyłanie...' : 'Wyślij'}
+            {replySending ? t('common.sending') : t('common.send')}
           </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!emailExistsDialog} onClose={() => setEmailExistsDialog(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Email już przypisany do rezerwacji</DialogTitle>
+        <DialogTitle>{t('hotelDetail.emailExists')}</DialogTitle>
         <DialogContent>
-          <Typography sx={{ mb: 1.5 }}>
-            Adres <strong>{emailExistsDialog?.email}</strong> jest już powiązany z{' '}
-            {emailExistsDialog?.reservations.length === 1 ? 'rezerwacją' : 'rezerwacjami'}:
-          </Typography>
+          <Typography sx={{ mb: 1.5 }}
+            dangerouslySetInnerHTML={{
+              __html: t('hotelDetail.emailExistsDesc', {
+                email: emailExistsDialog?.email,
+                count: emailExistsDialog?.reservations.length,
+              }),
+            }}
+          />
           <List dense disablePadding>
             {emailExistsDialog?.reservations.map((r: any) => (
               <ListItem key={r.id} disableGutters>
                 <ListItemText
                   primary={r.guest_name}
-                  secondary={`Pokój ${r.room_number} · ${r.check_in} – ${r.check_out}`}
+                  secondary={`${t('hotelDetail.roomLabel', { room: r.room_number })} · ${r.check_in} – ${r.check_out}`}
                 />
               </ListItem>
             ))}
           </List>
-          <Typography sx={{ mt: 1.5 }}>Czy chcesz dodać nową rezerwację dla tego gościa?</Typography>
+          <Typography sx={{ mt: 1.5 }}>{t('hotelDetail.addNewReservation')}</Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEmailExistsDialog(null)}>Anuluj</Button>
+          <Button onClick={() => setEmailExistsDialog(null)}>{t('common.cancel')}</Button>
           <Button
             variant="contained"
             onClick={() => {
@@ -487,10 +595,10 @@ export default function HotelDetailPage() {
               const inquiry = emailExistsDialog?.inquiry || null;
               setEmailExistsDialog(null);
               setInquiriesOpen(false);
-              navigate(`/hotels/${id}/reservations`, { state: { openNew: true, email, inquiry } });
+              navigate(`/hotels/${id}/reservations?filter=preliminary`, { state: { openNew: true, email, inquiry } });
             }}
           >
-            Nowa rezerwacja
+            {t('hotelDetail.newReservation')}
           </Button>
         </DialogActions>
       </Dialog>

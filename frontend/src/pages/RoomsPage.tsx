@@ -6,10 +6,9 @@ import {
   Paper, TableContainer, Box, Divider, InputAdornment,
 } from '@mui/material';
 import { Add, Edit, Delete, ArrowBack } from '@mui/icons-material';
+import { useTranslation } from 'react-i18next';
 import api from '../api';
 import { Room, RoomPricing } from '../types';
-
-const MONTH_NAMES = ['Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru'];
 
 function emptyPricing(): RoomPricing[] {
   return Array.from({ length: 12 }, (_, i) => ({ month: i + 1, price_per_night: 0 }));
@@ -35,11 +34,14 @@ function priceSummary(pricing: RoomPricing[]): string {
 export default function RoomsPage() {
   const { hotelId } = useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ number: '', capacity: 1 });
   const [pricing, setPricing] = useState<RoomPricing[]>(emptyPricing());
   const [editId, setEditId] = useState<number | null>(null);
+
+  const monthNames: string[] = t('rooms.months', { returnObjects: true }) as string[];
 
   const load = () => api.get(`/hotels/${hotelId}/rooms/`).then(r => setRooms(r.data.results || r.data));
 
@@ -71,7 +73,7 @@ export default function RoomsPage() {
   };
 
   const handleDelete = async (id: number) => {
-    if (confirm('Czy na pewno chcesz usunąć ten pokój?')) {
+    if (confirm(t('rooms.deleteConfirm'))) {
       await api.delete(`/hotels/${hotelId}/rooms/${id}/`);
       load();
     }
@@ -87,12 +89,12 @@ export default function RoomsPage() {
   return (
     <>
       <Button startIcon={<ArrowBack />} onClick={() => navigate(`/hotels/${hotelId}`)} sx={{ mb: 2 }}>
-        Powrót
+        {t('common.back')}
       </Button>
       <Typography variant="h5" sx={{ mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        Pokoje
+        {t('rooms.title')}
         <Button variant="contained" startIcon={<Add />} onClick={handleOpen}>
-          Dodaj pokój
+          {t('rooms.addRoom')}
         </Button>
       </Typography>
 
@@ -100,17 +102,17 @@ export default function RoomsPage() {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Numer pokoju</TableCell>
-              <TableCell>Pojemność</TableCell>
-              <TableCell>Cena za noc</TableCell>
-              <TableCell align="right">Akcje</TableCell>
+              <TableCell>{t('rooms.roomNumber')}</TableCell>
+              <TableCell>{t('rooms.capacity')}</TableCell>
+              <TableCell>{t('rooms.pricePerNight')}</TableCell>
+              <TableCell align="right">{t('common.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rooms.map(r => (
               <TableRow key={r.id}>
                 <TableCell>{r.number}</TableCell>
-                <TableCell>{r.capacity} os.</TableCell>
+                <TableCell>{r.capacity} {t('common.person')}</TableCell>
                 <TableCell>{priceSummary(r.pricing || [])}</TableCell>
                 <TableCell align="right">
                   <IconButton size="small" onClick={() => handleEdit(r)}><Edit /></IconButton>
@@ -123,23 +125,23 @@ export default function RoomsPage() {
       </TableContainer>
 
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editId ? 'Edytuj pokój' : 'Nowy pokój'}</DialogTitle>
+        <DialogTitle>{editId ? t('rooms.editRoom') : t('rooms.newRoom')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
-          <TextField label="Numer pokoju" value={form.number}
+          <TextField label={t('rooms.roomNumber')} value={form.number}
             onChange={e => setForm({ ...form, number: e.target.value })} />
-          <TextField label="Pojemność (os.)" type="number" value={form.capacity}
+          <TextField label={t('rooms.capacityFull')} type="number" value={form.capacity}
             onChange={e => setForm({ ...form, capacity: Math.max(1, +e.target.value) })} />
 
           <Divider />
           <Typography variant="subtitle2" color="text.secondary">
-            Cennik — cena za dobę (0 = brak stawki)
+            {t('rooms.pricingTitle')}
           </Typography>
 
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1.5 }}>
             {pricing.map((p, idx) => (
               <TextField
                 key={p.month}
-                label={MONTH_NAMES[idx]}
+                label={monthNames[idx]}
                 type="number"
                 size="small"
                 value={p.price_per_night || ''}
@@ -156,8 +158,8 @@ export default function RoomsPage() {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Anuluj</Button>
-          <Button variant="contained" onClick={handleSave}>Zapisz</Button>
+          <Button onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
+          <Button variant="contained" onClick={handleSave}>{t('common.save')}</Button>
         </DialogActions>
       </Dialog>
     </>

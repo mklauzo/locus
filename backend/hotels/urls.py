@@ -39,9 +39,11 @@ urlpatterns = [
          views.generate_email_reply, name='generate_email_reply'),
     path('hotels/<int:hotel_pk>/rooms/<int:room_pk>/calculate-price/', views.calculate_room_price, name='calculate_room_price'),
     path('hotels/<int:hotel_pk>/search-inquiries/', views.search_inquiries, name='search_inquiries'),
+    path('hotels/<int:hotel_pk>/delete-inquiry/', views.delete_inquiry, name='delete_inquiry'),
     path('hotels/<int:hotel_pk>/send-inquiry-reply/', views.send_inquiry_reply, name='send_inquiry_reply'),
     path('hotels/<int:hotel_pk>/generate-inquiry-reply/', views.generate_inquiry_reply, name='generate_inquiry_reply'),
     path('hotels/<int:hotel_pk>/archive-years/', views.archive_years, name='archive_years'),
+    path('hotels/<int:hotel_pk>/revenue-by-year/', views.revenue_by_year, name='revenue_by_year'),
     path('hotels/<int:hotel_pk>/calendar/', views.calendar_view, name='calendar'),
     path('hotels/<int:hotel_pk>/ai-assistant/', views.AIAssistantViewSet.as_view({
         'get': 'list', 'post': 'create',

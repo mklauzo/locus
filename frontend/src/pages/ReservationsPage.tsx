@@ -9,14 +9,18 @@ import {
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { Add, Visibility, Delete, ArrowBack, MailOutline, FilterAltOff } from '@mui/icons-material';
+import { useTranslation } from 'react-i18next';
 import api from '../api';
 import { Reservation, Room, Inquiry } from '../types';
 
-const PL_MONTHS = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
-  'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
-
 // Returns: number = calculated price, string = unavailability error, null = room/dates not yet selected
-function calcPrice(rooms: Room[], roomId: string, checkIn: string, checkOut: string): number | string | null {
+function calcPrice(
+  rooms: Room[],
+  roomId: string,
+  checkIn: string,
+  checkOut: string,
+  monthNames: string[],
+): number | string | null {
   const room = rooms.find(r => r.id === Number(roomId));
   if (!room) return null;
   if (!checkIn || !checkOut) return null;
@@ -35,7 +39,7 @@ function calcPrice(rooms: Room[], roomId: string, checkIn: string, checkOut: str
   while (cur < end) {
     const month = cur.getMonth() + 1;
     if (!(month in pricingMap)) {
-      return `Pokój niedostępny w ${PL_MONTHS[month]} — brak cennika dla tego miesiąca.`;
+      return `Pokój niedostępny w ${monthNames[month]} — brak cennika dla tego miesiąca.`;
     }
     total += pricingMap[month];
     cur.setDate(cur.getDate() + 1);
@@ -55,9 +59,11 @@ export default function ReservationsPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const theme = useTheme();
+  const { t } = useTranslation();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const filterParam = searchParams.get('filter');
   const yearParam = searchParams.get('year') || '';
+  const currentYear = new Date().getFullYear();
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [open, setOpen] = useState(false);
@@ -68,7 +74,10 @@ export default function ReservationsPage() {
   const [unavailableError, setUnavailableError] = useState('');
   const [filterGuest, setFilterGuest] = useState('');
   const [filterRoom, setFilterRoom] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState(filterParam === 'archive' && yearParam ? `${yearParam}-01-01` : '');
+  const [filterDateFrom, setFilterDateFrom] = useState(
+    filterParam === 'archive' && yearParam ? `${yearParam}-01-01` :
+    filterParam === 'confirmed' ? `${currentYear}-01-01` : ''
+  );
   const [filterDateTo, setFilterDateTo] = useState(filterParam === 'archive' && yearParam ? `${yearParam}-12-31` : '');
   const [filterPreliminary, setFilterPreliminary] = useState(filterParam === 'preliminary');
   const [filterConfirmed, setFilterConfirmed] = useState(filterParam === 'confirmed');
@@ -76,6 +85,8 @@ export default function ReservationsPage() {
   const [archiveYear] = useState(filterParam === 'archive' ? yearParam : '');
   const initState = location.state as { openNew?: boolean; email?: string; inquiry?: Inquiry } | null;
   const [openInquiry, setOpenInquiry] = useState<Inquiry | null>(initState?.inquiry || null);
+
+  const monthNames: string[] = t('months.full', { returnObjects: true }) as string[];
 
   const load = () => {
     let url = `/hotels/${hotelId}/reservations/?`;
@@ -88,7 +99,11 @@ export default function ReservationsPage() {
     if (filterSettled) url += `is_settled=true&`;
     api.get(url).then(r => {
       const list: Reservation[] = r.data.results || r.data;
-      list.sort((a, b) => Number(a.is_settled) - Number(b.is_settled));
+      list.sort((a, b) => {
+        const mailDiff = Number(b.has_new_mail) - Number(a.has_new_mail);
+        if (mailDiff !== 0) return mailDiff;
+        return Number(a.is_settled) - Number(b.is_settled);
+      });
       setReservations(list);
     });
   };
@@ -122,7 +137,7 @@ export default function ReservationsPage() {
 
   const applyAutoPrice = (patch: Partial<typeof emptyForm>, currentForm = form) => {
     const merged = { ...currentForm, ...patch };
-    const price = calcPrice(rooms, merged.room, merged.check_in, merged.check_out);
+    const price = calcPrice(rooms, merged.room, merged.check_in, merged.check_out, monthNames);
     if (typeof price === 'string') {
       setUnavailableError(price);
       setPriceAutoCalc(false);
@@ -167,13 +182,13 @@ export default function ReservationsPage() {
           : Object.entries(resp).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('; ');
         setError(msgs);
       } else {
-        setError('Wystąpił błąd podczas zapisywania.');
+        setError(t('reservations.saveError'));
       }
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (confirm('Czy na pewno chcesz usunąć tę rezerwację?')) {
+    if (confirm(t('reservations.deleteConfirm'))) {
       await api.delete(`/hotels/${hotelId}/reservations/${id}/`);
       load();
     }
@@ -182,12 +197,18 @@ export default function ReservationsPage() {
   return (
     <>
       <Button startIcon={<ArrowBack />} onClick={() => navigate(`/hotels/${hotelId}`)} sx={{ mb: 2 }}>
-        Powrót
+        {t('common.back')}
       </Button>
       <Typography variant="h5" sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        {archiveYear ? `Archiwum ${archiveYear}` : filterConfirmed ? 'Rezerwacje potwierdzone' : filterPreliminary ? 'Rezerwacje wstępne' : 'Rezerwacje'}
+        {archiveYear
+          ? t('reservations.archive', { year: archiveYear })
+          : filterConfirmed
+            ? t('reservations.confirmed')
+            : filterPreliminary
+              ? t('reservations.preliminary')
+              : t('reservations.title')}
         <Button variant="contained" startIcon={<Add />} onClick={() => { setForm(emptyForm); setEditId(null); setPriceAutoCalc(false); setUnavailableError(''); setOpenInquiry(null); setOpen(true); }}>
-          Nowa rezerwacja
+          {t('reservations.newReservation')}
         </Button>
       </Typography>
 
@@ -197,11 +218,11 @@ export default function ReservationsPage() {
           sx={{ mb: 2 }}
           action={
             <Button color="inherit" size="small" startIcon={<FilterAltOff />} onClick={() => setFilterPreliminary(false)}>
-              Pokaż wszystkie
+              {t('common.showAll')}
             </Button>
           }
         >
-          Wyświetlane: rezerwacje wstępne (bez wpłaconej zaliczki)
+          {t('reservations.showingPreliminary')}
         </Alert>
       )}
 
@@ -211,31 +232,31 @@ export default function ReservationsPage() {
           sx={{ mb: 2 }}
           action={
             <Button color="inherit" size="small" startIcon={<FilterAltOff />} onClick={() => setFilterConfirmed(false)}>
-              Pokaż wszystkie
+              {t('common.showAll')}
             </Button>
           }
         >
-          Wyświetlane: rezerwacje potwierdzone (z wpłaconą zaliczką)
+          {t('reservations.showingConfirmed')}
         </Alert>
       )}
 
       {filterSettled && archiveYear && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          Wyświetlane: rozliczone rezerwacje z roku {archiveYear}
+          {t('reservations.showingArchive', { year: archiveYear })}
         </Alert>
       )}
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'auto auto auto auto' }, gap: 1.5, mb: 2 }}>
-        <TextField label="Szukaj gościa" size="small" value={filterGuest}
+        <TextField label={t('reservations.filterGuest')} size="small" value={filterGuest}
           onChange={e => setFilterGuest(e.target.value)} sx={{ gridColumn: { xs: '1 / -1', sm: 'auto' } }} />
-        <TextField label="Pokój" size="small" select value={filterRoom}
+        <TextField label={t('reservations.filterRoom')} size="small" select value={filterRoom}
           onChange={e => setFilterRoom(e.target.value)}>
-          <MenuItem value="">Wszystkie</MenuItem>
+          <MenuItem value="">{t('common.all')}</MenuItem>
           {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number}</MenuItem>)}
         </TextField>
-        <TextField label="Od" type="date" size="small" InputLabelProps={{ shrink: true }}
+        <TextField label={t('common.from')} type="date" size="small" InputLabelProps={{ shrink: true }}
           value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} />
-        <TextField label="Do" type="date" size="small" InputLabelProps={{ shrink: true }}
+        <TextField label={t('common.to')} type="date" size="small" InputLabelProps={{ shrink: true }}
           value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} />
       </Box>
 
@@ -243,15 +264,15 @@ export default function ReservationsPage() {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Gość</TableCell>
-              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Pokój</TableCell>
-              <TableCell>Zameldowanie / Wyjazd</TableCell>
-              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Dni</TableCell>
-              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Zaliczka</TableCell>
-              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Dopłata</TableCell>
-              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Do zapłaty</TableCell>
-              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Kontakt</TableCell>
-              <TableCell align="right">Akcje</TableCell>
+              <TableCell>{t('reservations.guest')}</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{t('common.room')}</TableCell>
+              <TableCell>{t('reservations.checkInOut')}</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{t('common.days')}</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{t('common.deposit')}</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{t('common.surcharge')}</TableCell>
+              <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{t('common.totalAmount')}</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{t('common.contact')}</TableCell>
+              <TableCell align="right">{t('common.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -286,7 +307,7 @@ export default function ReservationsPage() {
                 <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
                   {r.deposit_paid
                     ? <Chip label={`${r.deposit_amount} zł`} color={r.is_settled ? 'default' : 'success'} size="small" />
-                    : <Chip label="Brak" size="small" />}
+                    : <Chip label={t('reservations.noDeposit')} size="small" />}
                 </TableCell>
                 <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
                   <Chip label={`${(parseFloat(r.remaining_amount || '0') - parseFloat(r.deposit_amount || '0')).toFixed(2)} zł`}
@@ -321,7 +342,7 @@ export default function ReservationsPage() {
         fullWidth
         fullScreen={isMobile}
       >
-        <DialogTitle>{editId ? 'Edytuj rezerwację' : 'Nowa rezerwacja'}</DialogTitle>
+        <DialogTitle>{editId ? t('reservations.editReservation') : t('reservations.newReservation')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 0, p: 0, pt: '0 !important' }}>
 
           {/* ── Panel emaila (lewa strona) ── */}
@@ -333,8 +354,8 @@ export default function ReservationsPage() {
               bgcolor: 'action.hover',
             }}>
               <Box sx={{ px: 2, pt: 2, pb: 1, borderBottom: 1, borderColor: 'divider' }}>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Treść zapytania</Typography>
-                <Typography variant="body2" fontWeight={600} noWrap>{openInquiry.subject || '(brak tematu)'}</Typography>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>{t('reservations.inquiryContent')}</Typography>
+                <Typography variant="body2" fontWeight={600} noWrap>{openInquiry.subject || t('reservations.noSubject')}</Typography>
                 <Typography variant="caption" color="text.secondary" display="block">
                   Od: <strong>{openInquiry.from_name}</strong> &lt;{openInquiry.from_email}&gt;
                 </Typography>
@@ -344,7 +365,7 @@ export default function ReservationsPage() {
               </Box>
               <Box sx={{ px: 2, py: 1.5, overflow: 'auto', flex: 1 }}>
                 <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6 }}>
-                  {openInquiry.body_preview || '(brak treści)'}
+                  {openInquiry.body_preview || t('reservations.noContent')}
                 </Typography>
               </Box>
             </Box>
@@ -353,59 +374,59 @@ export default function ReservationsPage() {
           {/* ── Formularz (prawa strona) ── */}
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, p: 2, overflow: 'auto' }}>
             {error && <Alert severity="error">{error}</Alert>}
-            <TextField label="Imię" value={form.guest_first_name}
+            <TextField label={t('common.firstName')} value={form.guest_first_name}
               onChange={e => setForm({ ...form, guest_first_name: e.target.value })} fullWidth />
-            <TextField label="Nazwisko" value={form.guest_last_name}
+            <TextField label={t('common.lastName')} value={form.guest_last_name}
               onChange={e => setForm({ ...form, guest_last_name: e.target.value })} fullWidth />
-            <TextField label="Pokój" select value={form.room}
+            <TextField label={t('common.room')} select value={form.room}
               onChange={e => setForm(applyAutoPrice({ room: e.target.value }))} fullWidth>
-              {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} os.)</MenuItem>)}
+              {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} {t('common.person')})</MenuItem>)}
             </TextField>
-            <TextField label="Osoby towarzyszące" type="number" value={form.companions}
+            <TextField label={t('reservations.companions')} type="number" value={form.companions}
               onChange={e => {
                 const selectedRoom = rooms.find(r => r.id === Number(form.room));
                 const max = selectedRoom ? selectedRoom.capacity - 1 : 99;
                 setForm({ ...form, companions: Math.min(max, Math.max(0, +e.target.value)) });
               }}
-              helperText={(() => { const r = rooms.find(rm => rm.id === Number(form.room)); return r ? `Max: ${r.capacity - 1} (pojemność pokoju: ${r.capacity})` : ''; })()} />
-            <TextField label="Zwierzęta" type="number" value={form.animals}
+              helperText={(() => { const r = rooms.find(rm => rm.id === Number(form.room)); return r ? t('reservations.companionsHelper', { max: r.capacity - 1, capacity: r.capacity }) : ''; })()} />
+            <TextField label={t('reservations.animals')} type="number" value={form.animals}
               onChange={e => setForm({ ...form, animals: Math.max(0, +e.target.value) })} />
-            <TextField label="Data zameldowania" type="date" InputLabelProps={{ shrink: true }}
+            <TextField label={t('reservations.checkIn')} type="date" InputLabelProps={{ shrink: true }}
               value={form.check_in} onChange={e => setForm(applyAutoPrice({ check_in: e.target.value }))} />
-            <TextField label="Data wymeldowania" type="date" InputLabelProps={{ shrink: true }}
+            <TextField label={t('reservations.checkOut')} type="date" InputLabelProps={{ shrink: true }}
               value={form.check_out} onChange={e => setForm(applyAutoPrice({ check_out: e.target.value }))} />
             <FormControlLabel control={<Checkbox checked={form.deposit_paid}
-              onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label="Zaliczka wpłacona" />
+              onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label={t('reservations.depositPaid')} />
             {form.deposit_paid && (
               <>
-                <TextField label="Kwota zaliczki" type="number" value={form.deposit_amount}
+                <TextField label={t('reservations.depositAmount')} type="number" value={form.deposit_amount}
                   onChange={e => setForm({ ...form, deposit_amount: e.target.value })} />
-                <TextField label="Data wpłaty" type="date" InputLabelProps={{ shrink: true }}
+                <TextField label={t('reservations.depositDate')} type="date" InputLabelProps={{ shrink: true }}
                   value={form.deposit_date} onChange={e => setForm({ ...form, deposit_date: e.target.value })} />
               </>
             )}
             {unavailableError && <Alert severity="error">{unavailableError}</Alert>}
             {!unavailableError && (
               <TextField
-                label="Kwota do zapłaty"
+                label={t('reservations.totalAmountLabel')}
                 type="number"
                 value={form.remaining_amount}
                 onChange={e => { setPriceAutoCalc(false); setForm({ ...form, remaining_amount: e.target.value }); }}
-                helperText={priceAutoCalc ? 'Obliczono automatycznie na podstawie cennika' : undefined}
+                helperText={priceAutoCalc ? t('reservations.priceAutoCalc') : undefined}
                 color={priceAutoCalc ? 'success' : undefined}
               />
             )}
-            <TextField label="Email kontaktowy" value={form.contact_email}
+            <TextField label={t('reservations.contactEmail')} value={form.contact_email}
               onChange={e => setForm({ ...form, contact_email: e.target.value })} />
-            <TextField label="Telefon" value={form.contact_phone}
+            <TextField label={t('reservations.contactPhone')} value={form.contact_phone}
               onChange={e => setForm({ ...form, contact_phone: e.target.value })} />
-            <TextField label="Uwagi" multiline rows={3} value={form.notes}
+            <TextField label={t('common.notes')} multiline rows={3} value={form.notes}
               onChange={e => setForm({ ...form, notes: e.target.value })} />
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setOpen(false); setOpenInquiry(null); }}>Anuluj</Button>
-          <Button variant="contained" onClick={handleSave} disabled={!!unavailableError}>Zapisz</Button>
+          <Button onClick={() => { setOpen(false); setOpenInquiry(null); }}>{t('common.cancel')}</Button>
+          <Button variant="contained" onClick={handleSave} disabled={!!unavailableError}>{t('common.save')}</Button>
         </DialogActions>
       </Dialog>
     </>

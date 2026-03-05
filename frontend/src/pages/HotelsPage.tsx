@@ -6,6 +6,7 @@ import {
   FormControlLabel, IconButton, Alert, CircularProgress, Divider,
 } from '@mui/material';
 import { Add, Edit, Delete } from '@mui/icons-material';
+import { useTranslation } from 'react-i18next';
 import api from '../api';
 import { Hotel } from '../types';
 import { useAuthContext } from '../App';
@@ -19,6 +20,7 @@ const emptyHotel = {
 export default function HotelsPage() {
   const { user } = useAuthContext();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const [hotels, setHotels] = useState<Hotel[]>([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyHotel);
@@ -65,7 +67,7 @@ export default function HotelsPage() {
   };
 
   const handleDelete = async (id: number) => {
-    if (confirm('Czy na pewno chcesz usunąć ten hotel?')) {
+    if (confirm(t('hotels.deleteConfirm'))) {
       await api.delete(`/hotels/${id}/`);
       load();
     }
@@ -81,7 +83,7 @@ export default function HotelsPage() {
       });
       setImapTest({ type: 'success', text: res.data.message });
     } catch (err: any) {
-      setImapTest({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia IMAP' });
+      setImapTest({ type: 'error', text: err.response?.data?.message || t('hotels.imapError') });
     } finally {
       setImapTesting(false);
     }
@@ -97,7 +99,7 @@ export default function HotelsPage() {
       });
       setSmtpTest({ type: 'success', text: res.data.message });
     } catch (err: any) {
-      setSmtpTest({ type: 'error', text: err.response?.data?.message || 'Błąd połączenia SMTP' });
+      setSmtpTest({ type: 'error', text: err.response?.data?.message || t('hotels.smtpError') });
     } finally {
       setSmtpTesting(false);
     }
@@ -106,9 +108,9 @@ export default function HotelsPage() {
   return (
     <>
       <Typography variant="h5" sx={{ mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        Hotele
+        {t('hotels.title')}
         <Button variant="contained" startIcon={<Add />} onClick={handleOpen}>
-          Dodaj hotel
+          {t('hotels.addHotel')}
         </Button>
       </Typography>
 
@@ -121,7 +123,7 @@ export default function HotelsPage() {
                 <Typography variant="body2" color="text.secondary">{h.address}</Typography>
                 <Typography variant="body2" color="text.secondary">{h.email}</Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {h.rooms.length} pokoi
+                  {t('hotels.roomsCount', { count: h.rooms.length })}
                 </Typography>
               </CardContent>
               {user?.role === 'ADMIN' && (
@@ -136,51 +138,51 @@ export default function HotelsPage() {
       </Grid>
 
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editId ? 'Edytuj hotel' : 'Nowy hotel'}</DialogTitle>
+        <DialogTitle>{editId ? t('hotels.editHotel') : t('hotels.newHotel')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
 
-          <TextField label="Nazwa" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} fullWidth />
-          <TextField label="Adres" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} fullWidth multiline rows={2} />
-          <TextField label="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} fullWidth />
+          <TextField label={t('common.name')} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} fullWidth />
+          <TextField label={t('common.address')} value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} fullWidth multiline rows={2} />
+          <TextField label={t('common.email')} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} fullWidth />
 
-          <Divider><Typography variant="caption" color="text.secondary">Konfiguracja IMAP (odbiór poczty)</Typography></Divider>
+          <Divider><Typography variant="caption" color="text.secondary">{t('hotels.imapConfig')}</Typography></Divider>
 
-          <TextField label="Host IMAP" value={form.imap_host} onChange={e => setForm({ ...form, imap_host: e.target.value })} fullWidth />
-          <TextField label="Port IMAP" type="number" value={form.imap_port} onChange={e => setForm({ ...form, imap_port: +e.target.value })} />
-          <FormControlLabel control={<Checkbox checked={form.imap_ssl} onChange={e => setForm({ ...form, imap_ssl: e.target.checked })} />} label="SSL (port 993)" />
-          <TextField label="Login IMAP" value={form.imap_login} onChange={e => setForm({ ...form, imap_login: e.target.value })} fullWidth />
-          <TextField label="Hasło IMAP" type="password" value={form.imap_password} onChange={e => setForm({ ...form, imap_password: e.target.value })} fullWidth />
+          <TextField label={t('hotels.imapHost')} value={form.imap_host} onChange={e => setForm({ ...form, imap_host: e.target.value })} fullWidth />
+          <TextField label={t('hotels.imapPort')} type="number" value={form.imap_port} onChange={e => setForm({ ...form, imap_port: +e.target.value })} />
+          <FormControlLabel control={<Checkbox checked={form.imap_ssl} onChange={e => setForm({ ...form, imap_ssl: e.target.checked })} />} label={t('hotels.imapSsl')} />
+          <TextField label={t('hotels.imapLogin')} value={form.imap_login} onChange={e => setForm({ ...form, imap_login: e.target.value })} fullWidth />
+          <TextField label={t('hotels.imapPassword')} type="password" value={form.imap_password} onChange={e => setForm({ ...form, imap_password: e.target.value })} fullWidth />
           <Button
             variant="outlined" size="small"
             disabled={imapTesting || !form.imap_host || !form.imap_login || !form.imap_password}
             startIcon={imapTesting ? <CircularProgress size={16} /> : undefined}
             onClick={handleTestImap}
           >
-            Testuj połączenie IMAP
+            {t('hotels.testImap')}
           </Button>
           {imapTest && <Alert severity={imapTest.type}>{imapTest.text}</Alert>}
 
-          <Divider><Typography variant="caption" color="text.secondary">Konfiguracja SMTP (wysyłka poczty)</Typography></Divider>
+          <Divider><Typography variant="caption" color="text.secondary">{t('hotels.smtpConfig')}</Typography></Divider>
 
-          <TextField label="Host SMTP" value={form.smtp_host} onChange={e => setForm({ ...form, smtp_host: e.target.value })} fullWidth placeholder="smtp.gmail.com" />
-          <TextField label="Port SMTP" type="number" value={form.smtp_port} onChange={e => setForm({ ...form, smtp_port: +e.target.value })} />
-          <FormControlLabel control={<Checkbox checked={form.smtp_ssl} onChange={e => setForm({ ...form, smtp_ssl: e.target.checked })} />} label="SSL (port 465) — odznacz dla STARTTLS (port 587)" />
-          <TextField label="Login SMTP" value={form.smtp_login} onChange={e => setForm({ ...form, smtp_login: e.target.value })} fullWidth />
-          <TextField label="Hasło SMTP" type="password" value={form.smtp_password} onChange={e => setForm({ ...form, smtp_password: e.target.value })} fullWidth />
+          <TextField label={t('hotels.smtpHost')} value={form.smtp_host} onChange={e => setForm({ ...form, smtp_host: e.target.value })} fullWidth placeholder="smtp.gmail.com" />
+          <TextField label={t('hotels.smtpPort')} type="number" value={form.smtp_port} onChange={e => setForm({ ...form, smtp_port: +e.target.value })} />
+          <FormControlLabel control={<Checkbox checked={form.smtp_ssl} onChange={e => setForm({ ...form, smtp_ssl: e.target.checked })} />} label={t('hotels.smtpSsl')} />
+          <TextField label={t('hotels.smtpLogin')} value={form.smtp_login} onChange={e => setForm({ ...form, smtp_login: e.target.value })} fullWidth />
+          <TextField label={t('hotels.smtpPassword')} type="password" value={form.smtp_password} onChange={e => setForm({ ...form, smtp_password: e.target.value })} fullWidth />
           <Button
             variant="outlined" size="small"
             disabled={smtpTesting || !form.smtp_host || !form.smtp_login || !form.smtp_password}
             startIcon={smtpTesting ? <CircularProgress size={16} /> : undefined}
             onClick={handleTestSmtp}
           >
-            Testuj połączenie SMTP
+            {t('hotels.testSmtp')}
           </Button>
           {smtpTest && <Alert severity={smtpTest.type}>{smtpTest.text}</Alert>}
 
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Anuluj</Button>
-          <Button variant="contained" onClick={handleSave}>Zapisz</Button>
+          <Button onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
+          <Button variant="contained" onClick={handleSave}>{t('common.save')}</Button>
         </DialogActions>
       </Dialog>
     </>

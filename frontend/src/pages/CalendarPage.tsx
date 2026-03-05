@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import { ArrowBack, ChevronLeft, ChevronRight, ViewList, GridView } from '@mui/icons-material';
 import dayjs from 'dayjs';
+import { useTranslation } from 'react-i18next';
 import api from '../api';
 import { CalendarEntry, RoomSimple } from '../types';
 
@@ -33,6 +34,7 @@ export default function CalendarPage() {
   const { hotelId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const { t, i18n } = useTranslation();
 
   const [viewMode, setViewMode] = useState<ViewMode>(
     () => (localStorage.getItem('calendarViewMode') as ViewMode) || 'gantt',
@@ -64,10 +66,11 @@ export default function CalendarPage() {
     [month],
   );
 
-  const PRELIMINARY_COLOR = 'rgba(76, 175, 80, 0.35)'; // transparent green
-  const SETTLED_COLOR = 'rgba(180, 180, 180, 0.55)'; // light gray
+  const today = useMemo(() => dayjs(), []);
 
-  // Consistent color per reservation across both views
+  const PRELIMINARY_COLOR = 'rgba(76, 175, 80, 0.35)';
+  const SETTLED_COLOR = 'rgba(180, 180, 180, 0.55)';
+
   const colorMap = useMemo(() => {
     const map: Record<number, string> = {};
     let colorIdx = 0;
@@ -92,7 +95,6 @@ export default function CalendarPage() {
     return map;
   }, [reservations]);
 
-  // Shared bar click/hover style
   const barBase = {
     borderRadius: 1, fontSize: 10, px: 0.5,
     overflow: 'hidden',
@@ -112,18 +114,21 @@ export default function CalendarPage() {
         {/* Header */}
         <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', position: 'sticky', top: 0, bgcolor: 'background.paper', zIndex: 1 }}>
           <Box sx={{ width: LABEL_WIDTH, flexShrink: 0, p: 0.5, borderRight: 1, borderColor: 'divider', fontWeight: 600, fontSize: 12 }}>
-            Pokój
+            {t('calendar.room')}
           </Box>
-          {days.map(d => (
-            <Box key={d.date()} sx={{
-              width: CELL_WIDTH, flexShrink: 0, textAlign: 'center', p: 0.5,
-              borderRight: 1, borderColor: 'divider', fontSize: 11,
-              bgcolor: d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent',
-            }}>
-              <Box>{d.date()}</Box>
-              <Box sx={{ fontSize: 9, opacity: 0.6 }}>{d.format('dd')}</Box>
-            </Box>
-          ))}
+          {days.map(d => {
+            const isToday = d.isSame(today, 'day');
+            return (
+              <Box key={d.date()} sx={{
+                width: CELL_WIDTH, flexShrink: 0, textAlign: 'center', p: 0.5,
+                borderRight: 1, borderColor: 'divider', fontSize: 11,
+                bgcolor: isToday ? 'rgba(255, 152, 0, 0.18)' : (d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent'),
+              }}>
+                <Box sx={{ fontWeight: isToday ? 700 : 'normal', color: isToday ? '#e65100' : 'inherit' }}>{d.date()}</Box>
+                <Box sx={{ fontSize: 9, opacity: 0.6 }}>{d.locale(i18n.language).format('dd')}</Box>
+              </Box>
+            );
+          })}
         </Box>
 
         {/* Room rows */}
@@ -139,7 +144,7 @@ export default function CalendarPage() {
               {days.map(d => (
                 <Box key={d.date()} sx={{
                   width: CELL_WIDTH, flexShrink: 0, borderRight: 1, borderColor: 'divider',
-                  bgcolor: d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent',
+                  bgcolor: d.isSame(today, 'day') ? 'rgba(255, 152, 0, 0.12)' : (d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent'),
                 }} />
               ))}
               {(reservationsByRoom[room.id] || []).map(r => {
@@ -201,7 +206,7 @@ export default function CalendarPage() {
           {/* Sticky header: room names */}
           <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', position: 'sticky', top: 0, bgcolor: 'background.paper', zIndex: 1 }}>
             <Box sx={{ width: DAY_LABEL_WIDTH, flexShrink: 0, p: 0.5, borderRight: 1, borderColor: 'divider', fontWeight: 600, fontSize: 12 }}>
-              Dzień
+              {t('calendar.day')}
             </Box>
             {rooms.map(room => (
               <Box key={room.id} sx={{
@@ -217,16 +222,19 @@ export default function CalendarPage() {
           <Box sx={{ display: 'flex' }}>
             {/* Day labels */}
             <Box sx={{ width: DAY_LABEL_WIDTH, flexShrink: 0 }}>
-              {days.map(d => (
-                <Box key={d.date()} sx={{
-                  height: ROW_HEIGHT, borderBottom: 1, borderRight: 1, borderColor: 'divider',
-                  bgcolor: d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent',
-                  display: 'flex', alignItems: 'center', px: 0.75, gap: 0.5, fontSize: 11,
-                }}>
-                  <Box sx={{ fontWeight: 600 }}>{d.date()}</Box>
-                  <Box sx={{ fontSize: 9, opacity: 0.6 }}>{d.format('dd')}</Box>
-                </Box>
-              ))}
+              {days.map(d => {
+                const isToday = d.isSame(today, 'day');
+                return (
+                  <Box key={d.date()} sx={{
+                    height: ROW_HEIGHT, borderBottom: 1, borderRight: 1, borderColor: 'divider',
+                    bgcolor: isToday ? 'rgba(255, 152, 0, 0.18)' : (d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent'),
+                    display: 'flex', alignItems: 'center', px: 0.75, gap: 0.5, fontSize: 11,
+                  }}>
+                    <Box sx={{ fontWeight: 700, color: isToday ? '#e65100' : 'inherit' }}>{d.date()}</Box>
+                    <Box sx={{ fontSize: 9, opacity: 0.6 }}>{d.locale(i18n.language).format('dd')}</Box>
+                  </Box>
+                );
+              })}
             </Box>
 
             {/* One column per room */}
@@ -239,7 +247,7 @@ export default function CalendarPage() {
                 {days.map(d => (
                   <Box key={d.date()} sx={{
                     height: ROW_HEIGHT, borderBottom: 1, borderColor: 'divider',
-                    bgcolor: d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent',
+                    bgcolor: d.isSame(today, 'day') ? 'rgba(255, 152, 0, 0.12)' : (d.day() === 0 || d.day() === 6 ? 'action.hover' : 'transparent'),
                   }} />
                 ))}
 
@@ -292,23 +300,23 @@ export default function CalendarPage() {
   return (
     <>
       <Button startIcon={<ArrowBack />} onClick={() => navigate(`/hotels/${hotelId}`)} sx={{ mb: 2 }}>
-        Powrót
+        {t('calendar.back')}
       </Button>
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
         <IconButton onClick={() => setMonth(m => m.subtract(1, 'month'))}><ChevronLeft /></IconButton>
         <Typography variant="h6" sx={{ minWidth: 200, textAlign: 'center' }}>
-          {month.format('MMMM YYYY')}
+          {month.locale(i18n.language).format('MMMM YYYY')}
         </Typography>
         <IconButton onClick={() => setMonth(m => m.add(1, 'month'))}><ChevronRight /></IconButton>
 
         <Box sx={{ flexGrow: 1 }} />
 
         <ToggleButtonGroup value={viewMode} exclusive onChange={handleViewMode} size="small">
-          <ToggleButton value="gantt" title="Pokoje jako wiersze, dni jako kolumny">
+          <ToggleButton value="gantt" title={t('calendar.ganttTitle')}>
             <ViewList fontSize="small" />
           </ToggleButton>
-          <ToggleButton value="matrix" title="Dni jako wiersze, pokoje jako kolumny">
+          <ToggleButton value="matrix" title={t('calendar.matrixTitle')}>
             <GridView fontSize="small" />
           </ToggleButton>
         </ToggleButtonGroup>

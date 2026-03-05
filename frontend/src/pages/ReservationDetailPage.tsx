@@ -8,13 +8,17 @@ import {
   useMediaQuery, useTheme, Collapse,
 } from '@mui/material';
 import { ArrowBack, Edit, History, Email, CheckCircle, Delete, Reply, Refresh, ExpandMore, ExpandLess, Send, AutoAwesome } from '@mui/icons-material';
+import { useTranslation } from 'react-i18next';
 import api from '../api';
 import { Reservation, Room } from '../types';
 
-const PL_MONTHS = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
-  'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
-
-function calcPrice(rooms: Room[], roomId: number | string, checkIn: string, checkOut: string): number | string | null {
+function calcPrice(
+  rooms: Room[],
+  roomId: number | string,
+  checkIn: string,
+  checkOut: string,
+  monthNames: string[],
+): number | string | null {
   const room = rooms.find(r => r.id === Number(roomId));
   if (!room) return null;
   if (!checkIn || !checkOut) return null;
@@ -29,7 +33,7 @@ function calcPrice(rooms: Room[], roomId: number | string, checkIn: string, chec
   const cur = new Date(start);
   while (cur < end) {
     const month = cur.getMonth() + 1;
-    if (!(month in pricingMap)) return `Pokój niedostępny w ${PL_MONTHS[month]} — brak cennika dla tego miesiąca.`;
+    if (!(month in pricingMap)) return `Pokój niedostępny w ${monthNames[month]} — brak cennika dla tego miesiąca.`;
     total += pricingMap[month];
     cur.setDate(cur.getDate() + 1);
   }
@@ -38,7 +42,13 @@ function calcPrice(rooms: Room[], roomId: number | string, checkIn: string, chec
 
 interface MonthBreakdown { month: number; month_name: string; nights: number; rate: number; amount: number; }
 
-function getPriceBreakdown(rooms: Room[], roomId: number | string, checkIn: string, checkOut: string): MonthBreakdown[] | null {
+function getPriceBreakdown(
+  rooms: Room[],
+  roomId: number | string,
+  checkIn: string,
+  checkOut: string,
+  monthNames: string[],
+): MonthBreakdown[] | null {
   const room = rooms.find(r => r.id === Number(roomId));
   if (!room || !checkIn || !checkOut) return null;
   const pricingMap: Record<number, number> = {};
@@ -57,8 +67,14 @@ function getPriceBreakdown(rooms: Room[], roomId: number | string, checkIn: stri
   return Object.entries(monthly).map(([m, nights]) => {
     const month = Number(m);
     const rate = pricingMap[month] || 0;
-    return { month, month_name: PL_MONTHS[month], nights, rate, amount: nights * rate };
+    return { month, month_name: monthNames[month], nights, rate, amount: nights * rate };
   });
+}
+
+function nightsSuffix(n: number, t: (key: string) => string): string {
+  if (n === 1) return t('reservationDetail.nightsSuffix_1');
+  if (n >= 2 && n <= 4) return t('reservationDetail.nightsSuffix_2_4');
+  return t('reservationDetail.nightsSuffix_5');
 }
 
 export default function ReservationDetailPage() {
@@ -66,6 +82,7 @@ export default function ReservationDetailPage() {
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const { t } = useTranslation();
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [editPriceAutoCalc, setEditPriceAutoCalc] = useState(false);
@@ -92,12 +109,15 @@ export default function ReservationDetailPage() {
   const [composeResult, setComposeResult] = useState<{ sent?: boolean; error?: string } | null>(null);
   const [expandedCorr, setExpandedCorr] = useState<number | null>(null);
 
+  const monthNames: string[] = t('months.full', { returnObjects: true }) as string[];
+  const fieldLabels: Record<string, string> = t('fields', { returnObjects: true }) as Record<string, string>;
+
   const load = () => {
     setLoading(true);
     setError('');
     api.get(`/hotels/${hotelId}/reservations/${id}/`)
       .then(r => setReservation(r.data))
-      .catch(err => setError(err.response?.data?.detail || 'Błąd ładowania rezerwacji'))
+      .catch(err => setError(err.response?.data?.detail || t('reservationDetail.loadError')))
       .finally(() => setLoading(false));
   };
 
@@ -124,7 +144,7 @@ export default function ReservationDetailPage() {
   };
 
   const handleSettle = async () => {
-    if (!confirm('Czy na pewno chcesz oznaczyć rezerwację jako rozliczoną?')) return;
+    if (!confirm(t('reservationDetail.settleConfirm'))) return;
     try {
       await api.post(`/hotels/${hotelId}/reservations/${id}/settle/`);
       load();
@@ -133,7 +153,7 @@ export default function ReservationDetailPage() {
 
   const applyAutoPrice = (patch: Record<string, any>, currentForm = form) => {
     const merged = { ...currentForm, ...patch };
-    const price = calcPrice(rooms, merged.room, merged.check_in, merged.check_out);
+    const price = calcPrice(rooms, merged.room, merged.check_in, merged.check_out, monthNames);
     if (typeof price === 'string') {
       setEditUnavailableError(price);
       setEditPriceAutoCalc(false);
@@ -191,13 +211,13 @@ export default function ReservationDetailPage() {
           : Object.entries(resp).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('; ');
         setEditError(msgs);
       } else {
-        setEditError('Błąd zapisywania');
+        setEditError(t('reservationDetail.saveEditError'));
       }
     }
   };
 
   const handleDeleteCorrespondence = async (corrId: number) => {
-    if (!confirm('Czy na pewno chcesz usunąć tę korespondencję?')) return;
+    if (!confirm(t('reservationDetail.deleteCorrespondenceConfirm'))) return;
     try {
       await api.delete(`/hotels/${hotelId}/reservations/${id}/correspondence/${corrId}/`);
       load();
@@ -222,7 +242,7 @@ export default function ReservationDetailPage() {
       );
       setReplyText(res.data.reply_text || '');
     } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Błąd generowania odpowiedzi.';
+      const msg = err.response?.data?.detail || t('reservationDetail.generateReplyError');
       setReplyResult({ error: msg });
     } finally {
       setReplyLoading(false);
@@ -243,7 +263,7 @@ export default function ReservationDetailPage() {
         error: res.data.imap_error || res.data.smtp_error,
       });
     } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Błąd wysyłania.';
+      const msg = err.response?.data?.detail || t('reservationDetail.sendError');
       setReplyResult({ error: msg });
     } finally {
       setReplyLoading(false);
@@ -265,7 +285,7 @@ export default function ReservationDetailPage() {
       });
       setComposeForm(f => ({ ...f, body: res.data.draft || '' }));
     } catch (err: any) {
-      setComposeResult({ error: err.response?.data?.detail || 'Błąd generowania szkicu.' });
+      setComposeResult({ error: err.response?.data?.detail || t('reservationDetail.aiDraftError') });
     } finally {
       setComposeAiLoading(false);
     }
@@ -283,7 +303,7 @@ export default function ReservationDetailPage() {
       setComposeResult({ sent: true });
       load();
     } catch (err: any) {
-      setComposeResult({ error: err.response?.data?.detail || 'Błąd wysyłania.' });
+      setComposeResult({ error: err.response?.data?.detail || t('reservationDetail.sendMessageError') });
     } finally {
       setComposeSending(false);
     }
@@ -296,8 +316,8 @@ export default function ReservationDetailPage() {
   if (error) {
     return (
       <>
-        <Button startIcon={<ArrowBack />} onClick={() => navigate(`/hotels/${hotelId}/reservations`)} sx={{ mb: 2 }}>
-          Powrót do listy
+        <Button startIcon={<ArrowBack />} onClick={() => navigate(-1)} sx={{ mb: 2 }}>
+          {t('reservationDetail.backToList')}
         </Button>
         <Alert severity="error">{error}</Alert>
       </>
@@ -311,18 +331,18 @@ export default function ReservationDetailPage() {
 
   return (
     <>
-      <Button startIcon={<ArrowBack />} onClick={() => navigate(`/hotels/${hotelId}/reservations`)} sx={{ mb: 2 }}>
-        Powrót do listy
+      <Button startIcon={<ArrowBack />} onClick={() => navigate(-1)} sx={{ mb: 2 }}>
+        {t('reservationDetail.backToList')}
       </Button>
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5">{reservation.guest_name}</Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button variant="outlined" startIcon={<Edit />} onClick={handleEdit}>Edytuj</Button>
-          <Button variant="outlined" startIcon={<Send />} onClick={openCompose}>Napisz wiadomość</Button>
+          <Button variant="outlined" startIcon={<Edit />} onClick={handleEdit}>{t('reservationDetail.editBtn')}</Button>
+          <Button variant="outlined" startIcon={<Send />} onClick={openCompose}>{t('reservationDetail.writeMessage')}</Button>
           <Button variant="outlined" startIcon={mailLoading ? <CircularProgress size={20} /> : <History />}
             onClick={() => handleSearchMail()} disabled={mailLoading}>
-            Historia
+            {t('reservationDetail.historyBtn')}
           </Button>
         </Box>
       </Box>
@@ -331,34 +351,34 @@ export default function ReservationDetailPage() {
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Typography variant="subtitle2" color="text.secondary">Szczegóły rezerwacji</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('reservationDetail.reservationDetails')}</Typography>
               <Divider sx={{ my: 1 }} />
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-                <Typography variant="body2">Pokój:</Typography>
+                <Typography variant="body2">{t('reservationDetail.roomLabel')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.room_number}</Typography>
-                <Typography variant="body2">Zameldowanie:</Typography>
+                <Typography variant="body2">{t('reservationDetail.checkIn')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.check_in}</Typography>
-                <Typography variant="body2">Wymeldowanie:</Typography>
+                <Typography variant="body2">{t('reservationDetail.checkOut')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.check_out}</Typography>
-                <Typography variant="body2">Liczba dni:</Typography>
+                <Typography variant="body2">{t('reservationDetail.daysCount')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.days_count}</Typography>
                 {(() => {
-                  const breakdown = getPriceBreakdown(rooms, reservation.room, reservation.check_in, reservation.check_out);
+                  const breakdown = getPriceBreakdown(rooms, reservation.room, reservation.check_in, reservation.check_out, monthNames);
                   if (!breakdown || breakdown.length === 0) return null;
                   return (
                     <>
-                      <Typography variant="body2" sx={{ gridColumn: '1 / -1', mt: 0.5 }} color="text.secondary">Cennik:</Typography>
+                      <Typography variant="body2" sx={{ gridColumn: '1 / -1', mt: 0.5 }} color="text.secondary">{t('reservationDetail.pricing')}</Typography>
                       {breakdown.map(b => (
                         <>
                           <Typography key={`${b.month}-label`} variant="body2" color="text.secondary" sx={{ pl: 1 }}>
-                            {b.month_name} ({b.nights} noc{b.nights === 1 ? '' : b.nights < 5 ? 'e' : 'y'} × {b.rate} zł):
+                            {b.month_name} ({b.nights} {nightsSuffix(b.nights, t)} × {b.rate} zł):
                           </Typography>
                           <Typography key={`${b.month}-val`} variant="body2" fontWeight={500}>{b.amount} zł</Typography>
                         </>
                       ))}
                       {breakdown.length > 1 && (
                         <>
-                          <Typography variant="body2" fontWeight={600}>Razem (cennik):</Typography>
+                          <Typography variant="body2" fontWeight={600}>{t('reservationDetail.pricingTotal')}</Typography>
                           <Typography variant="body2" fontWeight={600}>
                             {breakdown.reduce((s, b) => s + b.amount, 0)} zł
                           </Typography>
@@ -367,9 +387,9 @@ export default function ReservationDetailPage() {
                     </>
                   );
                 })()}
-                <Typography variant="body2">Osoby towarzyszące:</Typography>
+                <Typography variant="body2">{t('reservationDetail.companions')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.companions}</Typography>
-                <Typography variant="body2">Zwierzęta:</Typography>
+                <Typography variant="body2">{t('reservationDetail.animals')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.animals}</Typography>
               </Box>
             </CardContent>
@@ -379,48 +399,48 @@ export default function ReservationDetailPage() {
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Typography variant="subtitle2" color="text.secondary">Płatności i kontakt</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('reservationDetail.paymentsContact')}</Typography>
               <Divider sx={{ my: 1 }} />
               {reservation.is_settled && (
-                <Chip label="Rozliczono" color="success" sx={{ mb: 1 }} />
+                <Chip label={t('reservationDetail.settled')} color="success" sx={{ mb: 1 }} />
               )}
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-                <Typography variant="body2" sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>Zaliczka:</Typography>
+                <Typography variant="body2" sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>{t('reservationDetail.depositLabel')}</Typography>
                 <Box sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>
                   {reservation.deposit_paid
                     ? <Chip label={`${reservation.deposit_amount} zł`} color={reservation.is_settled ? 'default' : 'success'} size="small" />
-                    : <Chip label="Nie wpłacona" size="small" />}
+                    : <Chip label={t('reservationDetail.depositNotPaid')} size="small" />}
                 </Box>
                 {reservation.deposit_date && (
                   <>
-                    <Typography variant="body2">Data wpłaty:</Typography>
+                    <Typography variant="body2">{t('reservationDetail.depositDateLabel')}</Typography>
                     <Typography variant="body2" fontWeight={600}>{reservation.deposit_date}</Typography>
                   </>
                 )}
-                <Typography variant="body2" sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>Dopłata:</Typography>
+                <Typography variant="body2" sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>{t('reservationDetail.surchargeLabel')}</Typography>
                 <Typography variant="body2" fontWeight={600} sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>
                   {(parseFloat(reservation.remaining_amount) - parseFloat(reservation.deposit_amount || '0')).toFixed(2)} zł
                 </Typography>
-                <Typography variant="body2" sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>Do zapłaty:</Typography>
+                <Typography variant="body2" sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>{t('reservationDetail.totalAmountLabel')}</Typography>
                 <Typography variant="body2" fontWeight={600} sx={reservation.is_settled ? { textDecoration: 'line-through', opacity: 0.5 } : {}}>
                   {reservation.remaining_amount} zł
                 </Typography>
-                <Typography variant="body2">Email:</Typography>
+                <Typography variant="body2">{t('reservationDetail.emailLabel')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.contact_email || '—'}</Typography>
-                <Typography variant="body2">Telefon:</Typography>
+                <Typography variant="body2">{t('reservationDetail.phoneLabel')}</Typography>
                 <Typography variant="body2" fontWeight={600}>{reservation.contact_phone || '—'}</Typography>
               </Box>
               {!reservation.is_settled && (
                 <Box sx={{ mt: 2 }}>
                   <Button variant="contained" color="success" startIcon={<CheckCircle />} onClick={handleSettle}>
-                    Rozlicz
+                    {t('reservationDetail.settleBtn')}
                   </Button>
                 </Box>
               )}
               {reservation.notes && (
                 <>
                   <Divider sx={{ my: 1 }} />
-                  <Typography variant="body2" color="text.secondary">Uwagi:</Typography>
+                  <Typography variant="body2" color="text.secondary">{t('reservationDetail.notesLabel')}</Typography>
                   <Typography variant="body2">{reservation.notes}</Typography>
                 </>
               )}
@@ -433,16 +453,16 @@ export default function ReservationDetailPage() {
           <Grid item xs={12}>
             <Alert severity="info" action={
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                <TextField size="small" placeholder="Email gościa" value={mailEmail}
+                <TextField size="small" placeholder={t('reservationDetail.emailPlaceholder')} value={mailEmail}
                   onChange={e => setMailEmail(e.target.value)} />
                 <Button size="small" startIcon={<Email />}
                   onClick={() => { handleSearchMail(mailEmail); setMailEmail(''); }}
                   disabled={!mailEmail || mailLoading}>
-                  Szukaj
+                  {t('common.search')}
                 </Button>
               </Box>
             }>
-              Nie znaleziono korespondencji po nazwisku. Podaj email gościa, aby ponowić wyszukiwanie.
+              {t('reservationDetail.noEmailAlert')}
             </Alert>
           </Grid>
         )}
@@ -453,11 +473,11 @@ export default function ReservationDetailPage() {
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Historia korespondencji ({correspondence.length})
+                  {t('reservationDetail.correspondenceTitle', { count: correspondence.length })}
                 </Typography>
                 <IconButton
                   size="small"
-                  title="Pobierz nowe emaile z IMAP i odśwież"
+                  title={t('reservationDetail.refreshTooltip')}
                   disabled={mailLoading}
                   onClick={() => handleSearchMail()}
                 >
@@ -465,13 +485,13 @@ export default function ReservationDetailPage() {
                 </IconButton>
               </Box>
               {correspondence.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">Brak korespondencji</Typography>
+                <Typography variant="body2" color="text.secondary">{t('reservationDetail.noCorrespondence')}</Typography>
               ) : (
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Data</TableCell>
-                      <TableCell>Temat</TableCell>
+                      <TableCell>{t('reservationDetail.dateHeader')}</TableCell>
+                      <TableCell>{t('reservationDetail.subjectHeader')}</TableCell>
                       <TableCell align="right"></TableCell>
                     </TableRow>
                   </TableHead>
@@ -498,7 +518,7 @@ export default function ReservationDetailPage() {
                           <TableCell align="right" sx={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                             <IconButton
                               size="small"
-                              title="Generuj odpowiedź AI"
+                              title={t('reservationDetail.aiReplyTitle')}
                               onClick={() => openReplyDialog(c.id, c.subject, c.sender_email)}
                             >
                               <Reply fontSize="small" />
@@ -514,7 +534,7 @@ export default function ReservationDetailPage() {
                               <Box sx={{ px: 2, py: 1.5, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider' }}>
                                 {c.sender_email && (
                                   <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
-                                    Od: {c.sender_email}
+                                    {t('reservationDetail.fromLabel', { email: c.sender_email })}
                                   </Typography>
                                 )}
                                 <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
@@ -539,15 +559,15 @@ export default function ReservationDetailPage() {
             <Card>
               <CardContent>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-                  Historia zmian
+                  {t('reservationDetail.changeHistory')}
                 </Typography>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Data</TableCell>
-                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Użytkownik</TableCell>
-                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Akcja</TableCell>
-                      <TableCell>Zmiany</TableCell>
+                      <TableCell>{t('reservationDetail.dateHeader')}</TableCell>
+                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{t('reservationDetail.userHeader')}</TableCell>
+                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>{t('reservationDetail.actionHeader')}</TableCell>
+                      <TableCell>{t('reservationDetail.changesHeader')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -564,7 +584,7 @@ export default function ReservationDetailPage() {
                         <TableCell>
                           {l.changes && typeof l.changes === 'object' && Object.entries(l.changes).map(([k, v]) => (
                             <Typography key={k} variant="caption" display="block">
-                              {k}: {v?.old} → {v?.new}
+                              {fieldLabels[k] ?? k}: {translateFieldValue(v?.old, t)} → {translateFieldValue(v?.new, t)}
                             </Typography>
                           ))}
                         </TableCell>
@@ -580,14 +600,14 @@ export default function ReservationDetailPage() {
 
       {/* Reply Dialog */}
       <Dialog open={!!replyDialog} onClose={() => { setReplyDialog(null); setReplyResult(null); setReplyText(''); }} maxWidth="sm" fullWidth fullScreen={isMobile}>
-        <DialogTitle>Odpowiedź AI</DialogTitle>
+        <DialogTitle>{t('reservationDetail.aiReplyTitle')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
           <TextField
-            label="Adres e-mail odbiorcy"
+            label={t('reservationDetail.recipientEmail')}
             value={replyToEmail}
             onChange={e => setReplyToEmail(e.target.value)}
             fullWidth
-            placeholder="email@gości.pl"
+            placeholder="email@guest.com"
             disabled={!!replyResult}
           />
           <ToggleButtonGroup
@@ -598,37 +618,37 @@ export default function ReservationDetailPage() {
             fullWidth
             disabled={!!replyResult}
           >
-            <ToggleButton value="smtp" sx={{ flex: 1 }}>Wyślij emailem (SMTP)</ToggleButton>
-            <ToggleButton value="imap" sx={{ flex: 1 }}>Zapisz do roboczych (IMAP)</ToggleButton>
+            <ToggleButton value="smtp" sx={{ flex: 1 }}>{t('reservationDetail.sendViaSMTP')}</ToggleButton>
+            <ToggleButton value="imap" sx={{ flex: 1 }}>{t('reservationDetail.saveToIMAP')}</ToggleButton>
           </ToggleButtonGroup>
 
           {replyResult?.error && <Alert severity="error">{replyResult.error}</Alert>}
-          {replyResult?.smtpSent && <Alert severity="success">Email wysłany do {replyToEmail}.</Alert>}
-          {replyResult?.imapSaved && <Alert severity="success">Odpowiedź zapisana w folderze Wersje robocze.</Alert>}
+          {replyResult?.smtpSent && <Alert severity="success">{t('reservationDetail.smtpSent', { email: replyToEmail })}</Alert>}
+          {replyResult?.imapSaved && <Alert severity="success">{t('reservationDetail.imapSaved')}</Alert>}
           {replyResult && !replyResult.smtpSent && !replyResult.imapSaved && !replyResult.error && (
-            <Alert severity="warning">Brak konfiguracji IMAP/SMTP — skopiuj treść ręcznie.</Alert>
+            <Alert severity="warning">{t('reservationDetail.noImapSmtp')}</Alert>
           )}
 
           {replyText && !replyResult && (
             <Alert severity="info" sx={{ py: 0.5 }}>
-              Treść wygenerowana — możesz ją edytować przed wysłaniem.
+              {t('reservationDetail.contentGenerated')}
             </Alert>
           )}
           {(replyText || replyResult) && (
             <TextField
-              label="Treść odpowiedzi"
+              label={t('reservationDetail.replyContent')}
               multiline
               rows={10}
               value={replyText}
               onChange={e => setReplyText(e.target.value)}
               fullWidth
               InputProps={{ readOnly: !!replyResult }}
-              helperText={!replyResult ? `${replyText.length} znaków` : undefined}
+              helperText={!replyResult ? `${replyText.length} ${t('common.characters', { count: replyText.length }).split(' ')[1] || 'znaków'}` : undefined}
             />
           )}
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between' }}>
-          <Button onClick={() => { setReplyDialog(null); setReplyResult(null); setReplyText(''); }}>Zamknij</Button>
+          <Button onClick={() => { setReplyDialog(null); setReplyResult(null); setReplyText(''); }}>{t('common.close')}</Button>
           <Box sx={{ display: 'flex', gap: 1 }}>
             {!replyResult && (
               <Button
@@ -637,7 +657,7 @@ export default function ReservationDetailPage() {
                 onClick={handleGenerateReply}
                 disabled={replyLoading || !replyToEmail}
               >
-                {replyText ? 'Regeneruj' : 'Generuj'}
+                {replyText ? t('common.regenerate') : t('common.generate')}
               </Button>
             )}
             {replyText && !replyResult && (
@@ -647,7 +667,7 @@ export default function ReservationDetailPage() {
                 onClick={handleSendReply}
                 disabled={replyLoading || !replyToEmail || !replyText.trim()}
               >
-                {replyMode === 'smtp' ? 'Wyślij' : 'Zapisz do roboczych'}
+                {replyMode === 'smtp' ? t('common.send') : t('reservationDetail.saveToIMAPBtn')}
               </Button>
             )}
           </Box>
@@ -656,27 +676,27 @@ export default function ReservationDetailPage() {
 
       {/* Compose Dialog */}
       <Dialog open={composeOpen} onClose={() => setComposeOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
-        <DialogTitle>Napisz wiadomość do gościa</DialogTitle>
+        <DialogTitle>{t('reservationDetail.composeTitle')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
           {composeResult?.error && <Alert severity="error">{composeResult.error}</Alert>}
-          {composeResult?.sent && <Alert severity="success">Wiadomość wysłana i zapisana w historii korespondencji.</Alert>}
+          {composeResult?.sent && <Alert severity="success">{t('reservationDetail.messageSentSuccess')}</Alert>}
 
           <TextField
-            label="Do"
+            label={t('reservationDetail.toLabel')}
             value={composeForm.to}
             onChange={e => setComposeForm(f => ({ ...f, to: e.target.value }))}
             fullWidth
             disabled={composeResult?.sent}
           />
           <TextField
-            label="Temat"
+            label={t('common.subject')}
             value={composeForm.subject}
             onChange={e => setComposeForm(f => ({ ...f, subject: e.target.value }))}
             fullWidth
             disabled={composeResult?.sent}
           />
           <TextField
-            label="Treść"
+            label={t('common.content')}
             multiline
             rows={10}
             value={composeForm.body}
@@ -689,11 +709,11 @@ export default function ReservationDetailPage() {
           {!composeResult?.sent && (
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
               <TextField
-                label="Cel wiadomości (dla AI)"
+                label={t('reservationDetail.aiPurposeLabel')}
                 size="small"
                 value={composeAiPurpose}
                 onChange={e => setComposeAiPurpose(e.target.value)}
-                placeholder="np. potwierdzenie rezerwacji, przypomnienie o płatności…"
+                placeholder={t('reservationDetail.aiPurposePlaceholder')}
                 sx={{ flex: 1 }}
               />
               <Button
@@ -704,14 +724,14 @@ export default function ReservationDetailPage() {
                 disabled={composeAiLoading}
                 sx={{ mt: 0.5, flexShrink: 0 }}
               >
-                Szkic AI
+                {t('common.aiDraft')}
               </Button>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setComposeOpen(false)}>
-            {composeResult?.sent ? 'Zamknij' : 'Anuluj'}
+            {composeResult?.sent ? t('common.close') : t('common.cancel')}
           </Button>
           {!composeResult?.sent && (
             <Button
@@ -720,7 +740,7 @@ export default function ReservationDetailPage() {
               onClick={handleSendMessage}
               disabled={composeSending || !composeForm.to || !composeForm.subject || !composeForm.body.trim()}
             >
-              Wyślij
+              {t('common.send')}
             </Button>
           )}
         </DialogActions>
@@ -728,63 +748,70 @@ export default function ReservationDetailPage() {
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
-        <DialogTitle>Edytuj rezerwację</DialogTitle>
+        <DialogTitle>{t('reservations.editReservation')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
           {editError && <Alert severity="error">{editError}</Alert>}
-          <TextField label="Imię" value={form.guest_first_name || ''}
+          <TextField label={t('common.firstName')} value={form.guest_first_name || ''}
             onChange={e => setForm({ ...form, guest_first_name: e.target.value })} fullWidth />
-          <TextField label="Nazwisko" value={form.guest_last_name || ''}
+          <TextField label={t('common.lastName')} value={form.guest_last_name || ''}
             onChange={e => setForm({ ...form, guest_last_name: e.target.value })} fullWidth />
-          <TextField label="Pokój" select value={form.room || ''}
+          <TextField label={t('common.room')} select value={form.room || ''}
             onChange={e => setForm(applyAutoPrice({ room: e.target.value }))} fullWidth>
-            {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} os.)</MenuItem>)}
+            {rooms.map(r => <MenuItem key={r.id} value={r.id}>{r.number} ({r.capacity} {t('common.person')})</MenuItem>)}
           </TextField>
-          <TextField label="Osoby towarzyszące" type="number" value={form.companions ?? 0}
+          <TextField label={t('reservations.companions')} type="number" value={form.companions ?? 0}
             onChange={e => {
               const selectedRoom = rooms.find(r => r.id === Number(form.room));
               const max = selectedRoom ? selectedRoom.capacity - 1 : 99;
               setForm({ ...form, companions: Math.min(max, Math.max(0, +e.target.value)) });
             }}
-            helperText={(() => { const r = rooms.find(r => r.id === Number(form.room)); return r ? `Max: ${r.capacity - 1} (pojemność pokoju: ${r.capacity})` : ''; })()} />
-          <TextField label="Zwierzęta" type="number" value={form.animals ?? 0}
+            helperText={(() => { const r = rooms.find(r => r.id === Number(form.room)); return r ? t('reservations.companionsHelper', { max: r.capacity - 1, capacity: r.capacity }) : ''; })()} />
+          <TextField label={t('reservations.animals')} type="number" value={form.animals ?? 0}
             onChange={e => setForm({ ...form, animals: Math.max(0, +e.target.value) })} />
-          <TextField label="Data zameldowania" type="date" InputLabelProps={{ shrink: true }}
+          <TextField label={t('reservations.checkIn')} type="date" InputLabelProps={{ shrink: true }}
             value={form.check_in || ''} onChange={e => setForm(applyAutoPrice({ check_in: e.target.value }))} />
-          <TextField label="Data wymeldowania" type="date" InputLabelProps={{ shrink: true }}
+          <TextField label={t('reservations.checkOut')} type="date" InputLabelProps={{ shrink: true }}
             value={form.check_out || ''} onChange={e => setForm(applyAutoPrice({ check_out: e.target.value }))} />
           <FormControlLabel control={<Checkbox checked={form.deposit_paid || false}
-            onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label="Zaliczka wpłacona" />
+            onChange={e => setForm({ ...form, deposit_paid: e.target.checked })} />} label={t('reservations.depositPaid')} />
           {form.deposit_paid && (
             <>
-              <TextField label="Kwota zaliczki" type="number" value={form.deposit_amount || '0'}
+              <TextField label={t('reservations.depositAmount')} type="number" value={form.deposit_amount || '0'}
                 onChange={e => setForm({ ...form, deposit_amount: e.target.value })} />
-              <TextField label="Data wpłaty" type="date" InputLabelProps={{ shrink: true }}
+              <TextField label={t('reservations.depositDate')} type="date" InputLabelProps={{ shrink: true }}
                 value={form.deposit_date || ''} onChange={e => setForm({ ...form, deposit_date: e.target.value })} />
             </>
           )}
           {editUnavailableError && <Alert severity="error">{editUnavailableError}</Alert>}
           {!editUnavailableError && (
             <TextField
-              label="Kwota do zapłaty"
+              label={t('reservations.totalAmountLabel')}
               type="number"
               value={form.remaining_amount || '0'}
               onChange={e => { setEditPriceAutoCalc(false); setForm({ ...form, remaining_amount: e.target.value }); }}
-              helperText={editPriceAutoCalc ? 'Obliczono automatycznie na podstawie cennika' : undefined}
+              helperText={editPriceAutoCalc ? t('reservations.priceAutoCalc') : undefined}
               color={editPriceAutoCalc ? 'success' : undefined}
             />
           )}
-          <TextField label="Email" value={form.contact_email || ''}
+          <TextField label={t('common.email')} value={form.contact_email || ''}
             onChange={e => setForm({ ...form, contact_email: e.target.value })} />
-          <TextField label="Telefon" value={form.contact_phone || ''}
+          <TextField label={t('common.phone')} value={form.contact_phone || ''}
             onChange={e => setForm({ ...form, contact_phone: e.target.value })} />
-          <TextField label="Uwagi" multiline rows={3} value={form.notes || ''}
+          <TextField label={t('common.notes')} multiline rows={3} value={form.notes || ''}
             onChange={e => setForm({ ...form, notes: e.target.value })} />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEditOpen(false)}>Anuluj</Button>
-          <Button variant="contained" onClick={handleSave} disabled={!!editUnavailableError}>Zapisz</Button>
+          <Button onClick={() => setEditOpen(false)}>{t('common.cancel')}</Button>
+          <Button variant="contained" onClick={handleSave} disabled={!!editUnavailableError}>{t('common.save')}</Button>
         </DialogActions>
       </Dialog>
     </>
   );
+}
+
+function translateFieldValue(value: unknown, t: (key: string) => string): string {
+  if (value === true || value === 'True') return t('fieldValues.true');
+  if (value === false || value === 'False') return t('fieldValues.false');
+  if (value === null || value === undefined || value === '') return '—';
+  return String(value);
 }

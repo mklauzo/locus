@@ -11,11 +11,16 @@ import {
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pl';
+import 'dayjs/locale/en';
+import 'flag-icons/css/flag-icons.min.css';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { useAuthContext } from '../App';
 import { WeatherData } from '../types';
 import api from '../api';
+import { useAutoLogout } from '../hooks/useAutoLogout';
 
-dayjs.locale('pl');
+dayjs.locale(localStorage.getItem('locus_lang') || 'pl');
 
 const WEATHER_ICONS: Record<string, React.ReactNode> = {
   '01': <WbSunny fontSize="small" />,
@@ -30,8 +35,10 @@ const WEATHER_ICONS: Record<string, React.ReactNode> = {
 };
 
 export default function Layout() {
-  const { user, logout } = useAuthContext();
+  const { user, logout, autoLogoutSettings } = useAuthContext();
+  useAutoLogout(autoLogoutSettings, logout);
   const navigate = useNavigate();
+  const { t, i18n: i18nInstance } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [now, setNow] = useState(dayjs());
@@ -44,6 +51,13 @@ export default function Layout() {
   useEffect(() => {
     api.get('/weather/').then(res => setWeather(res.data)).catch(() => {});
   }, []);
+
+  const handleLang = (lang: 'pl' | 'en') => {
+    i18nInstance.changeLanguage(lang);
+    localStorage.setItem('locus_lang', lang);
+    dayjs.locale(lang);
+    setNow(dayjs());
+  };
 
   const weatherIcon = weather?.icon ? WEATHER_ICONS[weather.icon.substring(0, 2)] : null;
 
@@ -81,6 +95,24 @@ export default function Layout() {
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
 
+          {/* Language switcher */}
+          <Box sx={{ display: 'flex', gap: 0.5, mr: 1 }}>
+            <IconButton
+              size="small"
+              onClick={() => handleLang('pl')}
+              sx={{ opacity: i18nInstance.language === 'pl' ? 1 : 0.35, p: 0.5 }}
+            >
+              <span className="fi fi-pl" style={{ width: 22, height: 16, display: 'block', borderRadius: 2 }} />
+            </IconButton>
+            <IconButton
+              size="small"
+              onClick={() => handleLang('en')}
+              sx={{ opacity: i18nInstance.language === 'en' ? 1 : 0.35, p: 0.5 }}
+            >
+              <span className="fi fi-gb" style={{ width: 22, height: 16, display: 'block', borderRadius: 2 }} />
+            </IconButton>
+          </Box>
+
           {/* Username — ukryty na mobile */}
           <Typography variant="body2" sx={{ mr: 1, opacity: 0.8, display: { xs: 'none', sm: 'block' } }}>
             {user?.username}
@@ -100,22 +132,22 @@ export default function Layout() {
           <List>
             <ListItemButton onClick={() => { navigate('/'); setDrawerOpen(false); }}>
               <ListItemIcon><HotelIcon /></ListItemIcon>
-              <ListItemText primary="Hotele" />
+              <ListItemText primary={t('nav.hotels')} />
             </ListItemButton>
             {user?.role === 'ADMIN' && (
               <ListItemButton onClick={() => { navigate('/users'); setDrawerOpen(false); }}>
                 <ListItemIcon><PeopleIcon /></ListItemIcon>
-                <ListItemText primary="Użytkownicy" />
+                <ListItemText primary={t('nav.users')} />
               </ListItemButton>
             )}
             <ListItemButton onClick={() => { navigate('/settings'); setDrawerOpen(false); }}>
               <ListItemIcon><SettingsIcon /></ListItemIcon>
-              <ListItemText primary="Ustawienia" />
+              <ListItemText primary={t('nav.settings')} />
             </ListItemButton>
             <Divider sx={{ my: 1 }} />
             <ListItemButton onClick={() => { logout(); navigate('/login'); }}>
               <ListItemIcon><LogoutIcon /></ListItemIcon>
-              <ListItemText primary="Wyloguj" />
+              <ListItemText primary={t('nav.logout')} />
             </ListItemButton>
           </List>
         </Box>

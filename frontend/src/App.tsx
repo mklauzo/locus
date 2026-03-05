@@ -6,6 +6,7 @@ import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import 'dayjs/locale/pl';
 import { useAuth } from './hooks/useAuth';
 import { User } from './types';
+import { AutoLogoutSettings, DEFAULT_AUTO_LOGOUT, getAutoLogoutSettings, saveAutoLogoutSettings } from './hooks/useAutoLogout';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import HotelsPage from './pages/HotelsPage';
@@ -19,17 +20,20 @@ import SettingsPage from './pages/SettingsPage';
 import AIAssistantPage from './pages/AIAssistantPage';
 import ArchivePage from './pages/ArchivePage';
 import ArchiveYearPage from './pages/ArchiveYearPage';
+import RevenuePage from './pages/RevenuePage';
 
 interface AuthContextType {
   user: User | null;
   login: (u: string, p: string) => Promise<void>;
   logout: () => void;
+  autoLogoutSettings: AutoLogoutSettings;
 }
 
 export const AuthContext = createContext<AuthContextType>({
   user: null,
   login: async () => {},
   logout: () => {},
+  autoLogoutSettings: DEFAULT_AUTO_LOGOUT,
 });
 
 export const useAuthContext = () => useContext(AuthContext);
@@ -47,11 +51,13 @@ function getStoredTheme(username?: string): { mode: 'light' | 'dark'; color: str
 
 export default function App() {
   const { user, loading, login, logout } = useAuth();
-  const [themeSettings, setThemeSettings] = useState(DEFAULT_THEME);
+  const [themeSettings, setThemeSettings] = useState<{ mode: 'light' | 'dark'; color: string }>(DEFAULT_THEME);
+  const [autoLogoutSettings, setAutoLogoutSettings] = useState<AutoLogoutSettings>(DEFAULT_AUTO_LOGOUT);
 
-  // Load user-specific theme when user changes
+  // Load user-specific settings when user changes
   useEffect(() => {
     setThemeSettings(getStoredTheme(user?.username));
+    setAutoLogoutSettings(getAutoLogoutSettings(user?.username));
   }, [user?.username]);
 
   const theme = useMemo(
@@ -72,10 +78,15 @@ export default function App() {
     }
   };
 
+  const updateAutoLogout = (settings: AutoLogoutSettings) => {
+    setAutoLogoutSettings(settings);
+    saveAutoLogoutSettings(settings, user?.username);
+  };
+
   if (loading) return null;
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, autoLogoutSettings }}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="pl">
@@ -90,10 +101,11 @@ export default function App() {
                 <Route path="/hotels/:hotelId/reservations/:id" element={<ReservationDetailPage />} />
                 <Route path="/hotels/:hotelId/calendar" element={<CalendarPage />} />
                 <Route path="/hotels/:hotelId/ai-assistant" element={<AIAssistantPage />} />
+                <Route path="/hotels/:hotelId/revenue" element={<RevenuePage />} />
                 <Route path="/hotels/:hotelId/archive" element={<ArchivePage />} />
                 <Route path="/hotels/:hotelId/archive/:year" element={<ArchiveYearPage />} />
                 {user?.role === 'ADMIN' && <Route path="/users" element={<UsersPage />} />}
-                <Route path="/settings" element={<SettingsPage themeSettings={themeSettings} onUpdateTheme={updateTheme} />} />
+                <Route path="/settings" element={<SettingsPage themeSettings={themeSettings} onUpdateTheme={updateTheme} autoLogoutSettings={autoLogoutSettings} onUpdateAutoLogout={updateAutoLogout} />} />
               </Route>
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>

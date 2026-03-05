@@ -7,7 +7,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django.conf import settings
-from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.db.models import Q, Sum
+from django.db.models.functions import ExtractYear
 from django.utils import timezone
 from .models import Hotel, Room, RoomPricing, Reservation, MailCorrespondence, AuditLog, AIAssistant, AIAssistantDocument
 from .serializers import (
@@ -232,6 +234,10 @@ class ReservationViewSet(viewsets.ModelViewSet):
         is_settled = self.request.query_params.get('is_settled')
         if is_settled is not None:
             qs = qs.filter(is_settled=is_settled.lower() in ('true', '1', 'yes'))
+
+        has_new_mail = self.request.query_params.get('has_new_mail')
+        if has_new_mail is not None:
+            qs = qs.filter(has_new_mail=has_new_mail.lower() in ('true', '1', 'yes'))
 
         return qs
 
@@ -947,6 +953,51 @@ def search_inquiries(request, hotel_pk):
         return Response({'detail': f'Błąd połączenia: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+# --- Delete inquiry from IMAP ---
+
+@api_view(['POST'])
+def delete_inquiry(request, hotel_pk):
+    """Mark an inquiry email as deleted in the IMAP inbox and expunge it."""
+    try:
+        if request.user.is_admin:
+            hotel = Hotel.objects.get(pk=hotel_pk, is_deleted=False)
+        else:
+            hotel = Hotel.objects.get(pk=hotel_pk, users=request.user, is_deleted=False)
+    except Hotel.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if not hotel.imap_host or not hotel.imap_login or not hotel.imap_password:
+        return Response({'detail': 'Brak konfiguracji IMAP dla tego hotelu.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    message_id = request.data.get('message_id', '').strip()
+    if not message_id:
+        return Response({'detail': 'Brak identyfikatora wiadomości.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        if hotel.imap_ssl:
+            mail = imaplib.IMAP4_SSL(hotel.imap_host, hotel.imap_port)
+        else:
+            mail = imaplib.IMAP4(hotel.imap_host, hotel.imap_port)
+
+        mail.login(hotel.imap_login, hotel.imap_password)
+        mail.select('INBOX')
+
+        _, result = mail.search(None, f'HEADER Message-ID "{message_id}"')
+
+        if result[0]:
+            for msg_uid in result[0].split():
+                mail.store(msg_uid, '+FLAGS', '\\Deleted')
+            mail.expunge()
+
+        mail.logout()
+        return Response({'status': 'deleted'})
+
+    except imaplib.IMAP4.error as e:
+        return Response({'detail': f'Błąd IMAP: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({'detail': f'Błąd połączenia: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
 # --- Standalone inquiry reply ---
 
 @api_view(['POST'])
@@ -1040,6 +1091,18 @@ def generate_inquiry_reply(request, hotel_pk):
 
 
 # --- Calendar ---
+
+@api_view(['GET'])
+def revenue_by_year(request, hotel_pk):
+    rows = (
+        Reservation.objects
+        .filter(hotel_id=hotel_pk, is_settled=True, is_deleted=False)
+        .values(year=ExtractYear('check_in'))
+        .annotate(total=Sum('remaining_amount'))
+        .order_by('year')
+    )
+    return Response([{'year': r['year'], 'total': float(r['total'] or 0)} for r in rows])
+
 
 @api_view(['GET'])
 def archive_years(request, hotel_pk):
